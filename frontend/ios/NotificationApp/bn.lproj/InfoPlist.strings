@@ -1,0 +1,6 @@
+"NSCameraUsageDescription" = "ছবি তোলার জন্য ক্যামেরা অ্যাক্সেসের অনুমতি দিন।";
+"NSMicrophoneUsageDescription" = "অডিও ও ভিডিও কলের জন্য মাইক্রোফোন অ্যাক্সেসের অনুমতি দিন।";
+"NSLocationWhenInUseUsageDescription" = "কাছাকাছি ব্যবসা দেখাতে লোকেশন অ্যাক্সেসের অনুমতি দিন।";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "কাছাকাছি ব্যবসা দেখাতে লোকেশন অ্যাক্সেসের অনুমতি দিন।";
+"NSPhotoLibraryAddUsageDescription" = "ফটো লাইব্রেরিতে ছবি সংরক্ষণের অনুমতি দিন।";
+"NSPhotoLibraryUsageDescription" = "সার্ভিসে ছবি যোগ করার জন্য ফটো লাইব্রেরি অ্যাক্সেসের অনুমতি দিন।";

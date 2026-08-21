@@ -1,0 +1,6 @@
+"NSCameraUsageDescription" = "Erlaube den Kamerazugriff, um Fotos aufzunehmen.";
+"NSMicrophoneUsageDescription" = "Erlaube den Mikrofonzugriff fur Audio- und Videoanrufe.";
+"NSLocationWhenInUseUsageDescription" = "Erlaube den Standortzugriff, um Unternehmen in deiner Nahe anzuzeigen.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "Erlaube den Standortzugriff, um Unternehmen in deiner Nahe anzuzeigen.";
+"NSPhotoLibraryAddUsageDescription" = "Erlaube das Speichern von Fotos in deiner Mediathek.";
+"NSPhotoLibraryUsageDescription" = "Erlaube den Zugriff auf deine Mediathek, um Fotos zu deinen Services hinzuzufugen.";

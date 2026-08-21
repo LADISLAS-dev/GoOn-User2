@@ -1,0 +1,6 @@
+"NSCameraUsageDescription" = "允许访问相机以拍摄照片。";
+"NSMicrophoneUsageDescription" = "允许访问麦克风用于音视频通话。";
+"NSLocationWhenInUseUsageDescription" = "允许访问你的位置以显示附近的商家。";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "允许访问你的位置以显示附近的商家。";
+"NSPhotoLibraryAddUsageDescription" = "允许将照片保存到你的图库。";
+"NSPhotoLibraryUsageDescription" = "允许访问你的图库以为服务添加照片。";

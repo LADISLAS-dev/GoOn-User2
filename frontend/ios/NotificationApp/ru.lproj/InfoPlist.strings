@@ -1,0 +1,6 @@
+"NSCameraUsageDescription" = "Разрешите доступ к камере для съемки фото.";
+"NSMicrophoneUsageDescription" = "Разрешите доступ к микрофону для аудио- и видеозвонков.";
+"NSLocationWhenInUseUsageDescription" = "Разрешите доступ к геопозиции для показа ближайших компаний.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "Разрешите доступ к геопозиции для показа ближайших компаний.";
+"NSPhotoLibraryAddUsageDescription" = "Разрешите сохранять фотографии в медиатеку.";
+"NSPhotoLibraryUsageDescription" = "Разрешите доступ к медиатеке для добавления фото к вашим услугам.";

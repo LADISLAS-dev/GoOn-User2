@@ -1,0 +1,10 @@
+{
+  "watch": ["**/*.js", "**/*.json"],
+  "ignore": [
+    "node_modules/**",
+    "uploads/**",
+    "uploads-temp/**",
+    "firebase-service.json"
+  ],
+  "ext": "js,json"
+}

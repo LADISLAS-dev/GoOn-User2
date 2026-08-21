@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "GoOn",
+    "slug": "booking-chat-mobile",
+    "version": "1.0.0",
+    "runtimeVersion": "1.0.0",
+    "updates": {
+      "url": "https://u.expo.dev/4f3a800d-9c2e-482a-a42c-dbdee1cec06e",
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
+    "extra": {
+      "debugApiLogs": true,
+      "gifSplashDurationMs": 4500,
+      "eas": {
+        "projectId": "4f3a800d-9c2e-482a-a42c-dbdee1cec06e"
+      }
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "owner": "ramptha"
+  }
+}

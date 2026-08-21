@@ -1,0 +1,6 @@
+"NSCameraUsageDescription" = "Autorise l'acces a la camera pour prendre des photos.";
+"NSMicrophoneUsageDescription" = "Autorise l'acces au micro pour les appels audio et video.";
+"NSLocationWhenInUseUsageDescription" = "Autorise l'acces a ta position pour afficher les entreprises proches de toi.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "Autorise l'acces a ta position pour afficher les entreprises proches de toi.";
+"NSPhotoLibraryAddUsageDescription" = "Autorise l'enregistrement de photos dans ta galerie.";
+"NSPhotoLibraryUsageDescription" = "Autorise l'acces a ta galerie pour ajouter des photos a tes services.";

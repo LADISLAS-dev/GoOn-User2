@@ -1,0 +1,6 @@
+"NSCameraUsageDescription" = "Izinkan akses kamera untuk mengambil foto.";
+"NSMicrophoneUsageDescription" = "Izinkan akses mikrofon untuk panggilan audio dan video.";
+"NSLocationWhenInUseUsageDescription" = "Izinkan akses lokasi untuk menampilkan bisnis terdekat.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "Izinkan akses lokasi untuk menampilkan bisnis terdekat.";
+"NSPhotoLibraryAddUsageDescription" = "Izinkan menyimpan foto ke galeri Anda.";
+"NSPhotoLibraryUsageDescription" = "Izinkan akses ke galeri untuk menambahkan foto ke layanan Anda.";

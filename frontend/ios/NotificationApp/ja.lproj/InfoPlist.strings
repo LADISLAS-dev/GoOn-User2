@@ -1,0 +1,6 @@
+"NSCameraUsageDescription" = "写真を撮るためにカメラへのアクセスを許可してください。";
+"NSMicrophoneUsageDescription" = "音声通話とビデオ通話のためにマイクへのアクセスを許可してください。";
+"NSLocationWhenInUseUsageDescription" = "近くの店舗を表示するために位置情報へのアクセスを許可してください。";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "近くの店舗を表示するために位置情報へのアクセスを許可してください。";
+"NSPhotoLibraryAddUsageDescription" = "写真をライブラリに保存することを許可してください。";
+"NSPhotoLibraryUsageDescription" = "サービスに写真を追加するために写真ライブラリへのアクセスを許可してください。";

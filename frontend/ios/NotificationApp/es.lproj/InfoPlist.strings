@@ -1,0 +1,6 @@
+"NSCameraUsageDescription" = "Permite el acceso a la camara para tomar fotos.";
+"NSMicrophoneUsageDescription" = "Permite el acceso al microfono para llamadas de audio y video.";
+"NSLocationWhenInUseUsageDescription" = "Permite el acceso a tu ubicacion para mostrar empresas cercanas.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "Permite el acceso a tu ubicacion para mostrar empresas cercanas.";
+"NSPhotoLibraryAddUsageDescription" = "Permite guardar fotos en tu galeria.";
+"NSPhotoLibraryUsageDescription" = "Permite el acceso a tu galeria para agregar fotos a tus servicios.";

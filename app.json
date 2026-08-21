@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "GoOn",
+    "slug": "goon-guest-mode",
+    "version": "2.0.0",
+    "orientation": "portrait",
+    "icon": "./frontend/assets/icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "goon",
+    "splash": {
+      "backgroundColor": "#FFFFFF"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.goon.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#FFFFFF"
+      },
+      "package": "com.goon.app"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-asset",
+      "expo-font"
+    ]
+  }
+}

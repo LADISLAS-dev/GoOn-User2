@@ -1,0 +1,6 @@
+"NSCameraUsageDescription" = "اسمح بالوصول إلى الكاميرا لالتقاط الصور.";
+"NSMicrophoneUsageDescription" = "اسمح بالوصول إلى الميكروفون لمكالمات الصوت والفيديو.";
+"NSLocationWhenInUseUsageDescription" = "اسمح بالوصول إلى موقعك لعرض الشركات القريبة منك.";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "اسمح بالوصول إلى موقعك لعرض الشركات القريبة منك.";
+"NSPhotoLibraryAddUsageDescription" = "اسمح بحفظ الصور في معرض الصور لديك.";
+"NSPhotoLibraryUsageDescription" = "اسمح بالوصول إلى معرض الصور لإضافة صور إلى خدماتك.";
