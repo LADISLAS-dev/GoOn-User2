@@ -135,7 +135,7 @@ export default function ProfileScreen() {
       Alert.alert(t('ok', 'OK'), t('profileUpdated'), [
         {
           text: t('ok', 'OK'),
-          onPress: () => navigation.navigate('Home'),
+          onPress: () => navigation.navigate('UserHome'),
         },
       ]);
     } catch (e) {

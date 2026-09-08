@@ -27,7 +27,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native';
 import { useUser } from '../context/UserContext';
 import { useLanguage } from '../context/LanguageContext';
 import { useNotifications } from '../context/NotificationContext';
@@ -976,6 +976,8 @@ const CATEGORY_LABELS = {
 
 const FEATURED_COLORS = ['#E8402A', C.purple, '#2ECC71', C.blue, '#F39C12', '#14B8A6', '#E11D48'];
 const FEATURED_COMPANIES_CACHE_KEY = '@goon:featured-companies-cache';
+const APP_MODE_STORAGE_KEY = '@goon:app-mode';
+const MODE_SWITCH_GIF_DURATION_MS = 4400;
 const INLINE_BANNER_VIDEO_ENABLED = true;
 const APP_STORE_URL = 'https://apps.apple.com/app/id6783525610';
 const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.notificationapp.test';
@@ -1372,7 +1374,8 @@ function dedupeReminderNotifications(list = []) {
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 export default function HomeScreen() {
   const navigation = useNavigation();
-  const { user, logout, deleteAccount, refreshUserProfile, pushReadiness } = useUser();
+  const route = useRoute();
+  const { user, isGuest, logout, deleteAccount, refreshUserProfile, pushReadiness } = useUser();
   const { t, language } = useLanguage();
   const {
     notifications = [],
@@ -1383,6 +1386,7 @@ export default function HomeScreen() {
     const value = t(key);
     return value === key ? fallback : value;
   }, [t]);
+  const isProMode = String(route?.params?.appMode || 'user').toLowerCase() === 'pro';
 
   const activeLanguage = useMemo(() => language, [language]);
 
@@ -1407,6 +1411,7 @@ export default function HomeScreen() {
   const [bannerMediaViewer, setBannerMediaViewer] = useState(null);
   const [bannerEditorOpen, setBannerEditorOpen] = useState(false);
   const [bannerEditId, setBannerEditId] = useState(null);
+  const [isSwitchingMode, setIsSwitchingMode] = useState(false);
   const [bannerForm, setBannerForm] = useState({
     title: '',
     subtitle: '',
@@ -1426,6 +1431,7 @@ export default function HomeScreen() {
   const bannerIsDraggingRef = useRef(false);
   const bannerIsAnimatingRef = useRef(false);
   const bannerAutoAnimRef = useRef(null);
+  const modeSwitchTimeoutRef = useRef(null);
   const homeRefreshInFlightRef = useRef(false);
   const lastHomeRefreshAtRef = useRef(0);
 
@@ -1798,6 +1804,14 @@ export default function HomeScreen() {
   }, [navigation, refreshHomeData]);
 
   useEffect(() => {
+    return () => {
+      if (modeSwitchTimeoutRef.current) {
+        clearTimeout(modeSwitchTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     bannerAutoListenerIdRef.current = bannerAutoDriver.addListener(({ value }) => {
       bannerCurrentOffsetRef.current = value;
       bannerListRef.current?.scrollToOffset?.({ offset: value, animated: false });
@@ -2102,8 +2116,29 @@ export default function HomeScreen() {
     }
   }, [tr]);
 
+  const handleSwitchToProSpace = useCallback(() => {
+    if (isGuest) {
+      setDrawerOpen(false);
+      navigation.navigate('Login');
+      return;
+    }
+
+    if (isSwitchingMode) return;
+
+    const nextRoute = isProMode ? 'UserHome' : 'ProHome';
+    const nextMode = isProMode ? 'user' : 'pro';
+    setDrawerOpen(false);
+    setIsSwitchingMode(true);
+    AsyncStorage.setItem(APP_MODE_STORAGE_KEY, nextMode).catch(() => {});
+
+    modeSwitchTimeoutRef.current = setTimeout(() => {
+      setIsSwitchingMode(false);
+      navigation.navigate(nextRoute);
+    }, MODE_SWITCH_GIF_DURATION_MS);
+  }, [isGuest, navigation, isProMode, isSwitchingMode]);
+
   const drawerMainItems = [
-    { key: 'home', icon: '🏠', label: t('drawerHome'), active: true, onPress: () => openScreenFromDrawer('Home') },
+    { key: 'home', icon: '🏠', label: t('drawerHome'), active: true, onPress: () => openScreenFromDrawer(isProMode ? 'ProHome' : 'UserHome') },
     { key: 'dashboard', icon: '📊', label: t('drawerDashboard'), onPress: () => openScreenFromDrawer('AnalyticsDashboard') },
     { key: 'profile', icon: '👤', label: t('drawerProfile'), onPress: () => openScreenFromDrawer('Profile') },
     { key: 'messages', icon: '💬', label: t('tabMessages'), onPress: openDrawerMessages },
@@ -2188,6 +2223,18 @@ export default function HomeScreen() {
                 }
               >
                 <Text style={styles.drawerBottomText}>🌐 {t('drawerCategories')}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.drawerBottomItem, styles.drawerBottomItemPrimary]}
+                onPress={handleSwitchToProSpace}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.drawerBottomText, styles.drawerBottomTextPrimary]}>
+                  {isProMode
+                    ? `👤 ${tr('switchToUserMode', 'Passer en mode User')}`
+                    : `🏢 ${tr('switchToProMode', 'Passer en mode Pro')}`}
+                </Text>
               </TouchableOpacity>
 
               <TouchableOpacity style={styles.drawerBottomItem} onPress={handleLogout}>
@@ -2358,6 +2405,16 @@ export default function HomeScreen() {
             />
           </Pressable>
         </Pressable>
+      </Modal>
+
+      <Modal visible={isSwitchingMode} transparent animationType="fade">
+        <View style={styles.modeSwitchOverlay}>
+          <Image
+            source={require('../assets/LogoAnimeGoOn.gif')}
+            style={styles.modeSwitchGif}
+            resizeMode="contain"
+          />
+        </View>
       </Modal>
 
       <Modal
@@ -2637,7 +2694,7 @@ export default function HomeScreen() {
           />
         }
       >
-        {pushReadiness?.requiresAttention ? (
+        {!isGuest && pushReadiness?.requiresAttention ? (
           <View style={styles.pushWarningCard}>
             <Text style={styles.pushWarningTitle}>⚠️ {homeText('pushWarningTitle', 'Notifications non pretes')}</Text>
             <Text style={styles.pushWarningText}>
@@ -2855,6 +2912,16 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  modeSwitchOverlay: {
+    flex: 1,
+    backgroundColor: '#9320B5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modeSwitchGif: {
+    width: '90%',
+    height: '90%',
+  },
 
   // Header
   header:      { backgroundColor: C.purple },
@@ -3037,6 +3104,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 10,
   },
+  drawerBottomItemPrimary: {
+    backgroundColor: '#EEF4FF',
+    borderWidth: 1,
+    borderColor: '#C7D7FE',
+  },
   drawerBottomItemDanger: {
     backgroundColor: '#FFF1F2',
   },
@@ -3047,6 +3119,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#374151',
+  },
+  drawerBottomTextPrimary: {
+    color: '#1D4ED8',
   },
   drawerBottomTextDanger: {
     color: '#B42318',

@@ -409,4 +409,9 @@ export const getTypingStatus = async ({ companyId, peerId }) => {
   return res.data;
 };
 
+export const createReport = async ({ targetType, targetId, reason, details }) => {
+  const res = await api.post('/reports', { targetType, targetId, reason, details });
+  return res.data;
+};
+
 export default api;

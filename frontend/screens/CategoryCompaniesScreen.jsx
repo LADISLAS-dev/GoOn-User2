@@ -286,13 +286,13 @@ const PremiumCompanyCard = React.memo(function PremiumCompanyCard({
 
   const scrollOpacity = scrollY.interpolate({
     inputRange,
-    outputRange: [0.78, 3, 0.78],
+    outputRange: [0.85, 1, 0.85],
     extrapolate: 'clamp',
   });
 
   const scrollTranslateY = scrollY.interpolate({
     inputRange,
-    outputRange: [3, 0, -3],
+    outputRange: [2, 0, -2],
     extrapolate: 'clamp',
   });
 
@@ -951,7 +951,7 @@ export default function CategoryCompaniesScreen() {
       return;
     }
 
-    navigation.navigate('Home');
+    navigation.navigate('UserHome');
   };
 
   const handleCompanyPress = (company) => {

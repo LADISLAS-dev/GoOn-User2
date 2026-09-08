@@ -1,0 +1,12 @@
+# Keep EAS upload focused on the app project and avoid large nested repositories
+GoOn-Pro/
+backend/
+
+# Local artifacts
+*.ipa
+*.apk
+*.aab
+
+# OS / editor
+.DS_Store
+.vscode/
