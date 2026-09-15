@@ -1,4 +1,4 @@
-import { createNavigationContainerRef } from '@react-navigation/native';
+import { CommonActions, createNavigationContainerRef } from '@react-navigation/native';
 
 export const navigationRef =
   createNavigationContainerRef();
@@ -33,6 +33,17 @@ export function flushPendingNavigationActions() {
 export function navigate(name, params) {
   runOrQueue(() => {
     navigationRef.navigate(name, params);
+  });
+}
+
+export function resetRoot(name, params) {
+  runOrQueue(() => {
+    navigationRef.dispatch(
+      CommonActions.reset({
+        index: 0,
+        routes: [{ name, params }],
+      })
+    );
   });
 }
 

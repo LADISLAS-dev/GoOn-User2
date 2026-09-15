@@ -18,6 +18,7 @@ import {
 import { useUser } from '../context/UserContext';
 import { useLanguage } from '../context/LanguageContext';
 import { resetPassword } from '../services/authService';
+import { resetRoot } from '../navigation/navigationRef';
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -1820,7 +1821,14 @@ export default function LoginScreen({ navigation }) {
         </TouchableOpacity>
 
             {/* ── Guest Mode Button ── */}
-            <TouchableOpacity style={styles.guestButton} onPress={async () => { await enterGuestMode(); navigation.navigate('ProHome'); }} activeOpacity={0.85}>
+            <TouchableOpacity
+              style={styles.guestButton}
+              onPress={async () => {
+                await enterGuestMode?.();
+                resetRoot('ProHome');
+              }}
+              activeOpacity={0.85}
+            >
               <Text style={styles.guestButtonText}>{u('continueAsGuest')}</Text>
             </TouchableOpacity>
 

@@ -151,6 +151,87 @@ router.get('/typing/:companyId/:peerId', authMiddleware, async (req, res) => {
   }
 });
 
+/* ──────────────────────────────────────────────
+   POST /messages/block → bloquer un utilisateur
+   Body: { userId }
+────────────────────────────────────────────── */
+router.post('/block', authMiddleware, async (req, res) => {
+  try {
+    const currentUser = await getCurrentMongoUser(req);
+    if (!currentUser) {
+      return res.status(401).json({ error: 'Authenticated user not found in MongoDB' });
+    }
+
+    const { userId } = req.body || {};
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+    if (String(userId) === String(currentUser._id)) {
+      return res.status(400).json({ error: 'Cannot block yourself' });
+    }
+
+    const target = await User.findById(userId);
+    if (!target) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const alreadyBlocked = (currentUser.blockedUsers || []).some(
+      (id) => String(id) === String(userId)
+    );
+    if (!alreadyBlocked) {
+      currentUser.blockedUsers.push(userId);
+      await currentUser.save();
+    }
+
+    return res.json({ ok: true, blockedUsers: currentUser.blockedUsers });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/* ──────────────────────────────────────────────
+   POST /messages/unblock → débloquer un utilisateur
+   Body: { userId }
+────────────────────────────────────────────── */
+router.post('/unblock', authMiddleware, async (req, res) => {
+  try {
+    const currentUser = await getCurrentMongoUser(req);
+    if (!currentUser) {
+      return res.status(401).json({ error: 'Authenticated user not found in MongoDB' });
+    }
+
+    const { userId } = req.body || {};
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+
+    currentUser.blockedUsers = (currentUser.blockedUsers || []).filter(
+      (id) => String(id) !== String(userId)
+    );
+    await currentUser.save();
+
+    return res.json({ ok: true, blockedUsers: currentUser.blockedUsers });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/* ──────────────────────────────────────────────
+   GET /messages/blocked → liste des utilisateurs bloqués
+────────────────────────────────────────────── */
+router.get('/blocked', authMiddleware, async (req, res) => {
+  try {
+    const currentUser = await getCurrentMongoUser(req);
+    if (!currentUser) {
+      return res.status(401).json({ error: 'Authenticated user not found in MongoDB' });
+    }
+    return res.json({ blockedUsers: currentUser.blockedUsers || [] });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+
 // GET /messages/:companyId
 router.get('/:companyId', authMiddleware, async (req, res) => {
   try {
@@ -229,6 +310,17 @@ router.post('/', authMiddleware, upload.single('attachment'), async (req, res) =
 
     if (sameMongoUser || sameFirebaseUser) {
       return res.status(400).json({ error: 'Cannot send a message to yourself' });
+    }
+
+    // Bloquer l'envoi si l'un des deux utilisateurs a bloqué l'autre.
+    const receiverBlockedSender = (receiver.blockedUsers || []).some(
+      (id) => String(id) === String(currentUser._id)
+    );
+    const senderBlockedReceiver = (currentUser.blockedUsers || []).some(
+      (id) => String(id) === String(receiver._id)
+    );
+    if (receiverBlockedSender || senderBlockedReceiver) {
+      return res.status(403).json({ error: 'Message blocked: you or the recipient has blocked the other user.' });
     }
 
     const ownerId = String(company.ownerId || '');

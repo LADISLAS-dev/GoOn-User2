@@ -41,6 +41,10 @@ const userSchema = new mongoose.Schema({
   bio: { type: String, default: '' },
   language: { type: String, default: 'en' },
   lastActiveAt: { type: Date, default: null },
+  blockedUsers: {
+    type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    default: [],
+  },
   notificationPreferences: {
     type: notificationPreferencesSchema,
     default: () => ({}),

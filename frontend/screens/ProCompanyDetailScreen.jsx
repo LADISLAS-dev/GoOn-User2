@@ -225,6 +225,13 @@ const mergePersistedSetupState = (remoteCompany, cachedCompany) => {
 const isSetupPatchUnsupported = (error) =>
   error?.response?.status === 400 && error?.response?.data?.code === 'NO_MUTABLE_FIELDS';
 
+const getApiErrorMessage = (error, fallback) => {
+  const serverMessage = String(
+    error?.response?.data?.error || error?.response?.data?.message || ''
+  ).trim();
+  return serverMessage || fallback;
+};
+
 // ─── API ───────────────────────────────────────────────────────────────────
 const patchCompany = (id, body) =>
   api.patch(`/companies/${id}`, body).then((r) => r.data);
@@ -847,9 +854,43 @@ export default function CompanyDetailScreen({ route, navigation }) {
     }
 
     const previousProfileValidatedAt = company?.profileValidatedAt || null;
+    const normalizedCategoryIds = normalizeCompanyCategories(company);
+    const primaryCategoryId = String(company?.categoryId || normalizedCategoryIds[0] || '').trim();
+
+    const localCarouselImages = Array.isArray(company?.carouselImages)
+      ? company.carouselImages.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    const localGalleryImages = Array.isArray(company?.galleryImages)
+      ? company.galleryImages.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+
+    let remoteCarouselImages = [];
+    let remoteGalleryImages = [];
+    try {
+      const latestCompany = await getCompanyById(companyId);
+      remoteCarouselImages = Array.isArray(latestCompany?.carouselImages)
+        ? latestCompany.carouselImages.map((item) => String(item || '').trim()).filter(Boolean)
+        : [];
+      remoteGalleryImages = Array.isArray(latestCompany?.galleryImages)
+        ? latestCompany.galleryImages.map((item) => String(item || '').trim()).filter(Boolean)
+        : [];
+    } catch (_) {
+      // Best effort only: continue with local state if refresh fails.
+    }
+
+    const normalizedCarouselImages = localCarouselImages.length
+      ? localCarouselImages
+      : remoteCarouselImages;
+    const normalizedGalleryImages = localGalleryImages.length
+      ? localGalleryImages
+      : remoteGalleryImages;
     const payload = {
       setupStatus: 'ready',
       profileValidatedAt: new Date().toISOString(),
+      ...(primaryCategoryId ? { categoryId: primaryCategoryId } : {}),
+      ...(normalizedCategoryIds.length ? { categoryIds: normalizedCategoryIds } : {}),
+      ...(normalizedCarouselImages.length ? { carouselImages: normalizedCarouselImages } : {}),
+      ...(normalizedGalleryImages.length ? { galleryImages: normalizedGalleryImages } : {}),
     };
 
     setValidatingProfile(true);
@@ -860,6 +901,20 @@ export default function CompanyDetailScreen({ route, navigation }) {
 
     try {
       await patchCompany(companyId, payload);
+
+      // Best effort refresh: the PATCH is the source of truth for save success.
+      // Do not fail validation on transient GET errors right after the update.
+      try {
+        const refreshedCompany = await getCompanyById(companyId);
+        if (refreshedCompany) {
+          applyUpdate((prev) => ({
+            ...prev,
+            ...refreshedCompany,
+          }));
+        }
+      } catch (refreshError) {
+        console.warn('validateCompanyProfile refresh skipped:', refreshError?.message || refreshError);
+      }
     } catch (error) {
       if (!isSetupPatchUnsupported(error)) {
         applyUpdate((prev) => ({
@@ -879,7 +934,19 @@ export default function CompanyDetailScreen({ route, navigation }) {
 
     Alert.alert(
       tr('companyReadyTitle', 'Company ready'),
-      tr('companyReadyBody', 'The company profile is now complete and ready to be presented professionally.')
+      tr('companyReadyBody', 'The company profile is now complete and ready to be presented professionally.'),
+      [
+        {
+          text: tr('continueAction', 'Continuer'),
+          onPress: () => {
+            if (!onboardingFlow) return;
+            navigation.reset({
+              index: 0,
+              routes: [{ name: 'ProHome' }],
+            });
+          },
+        },
+      ]
     );
   };
 
@@ -969,13 +1036,18 @@ export default function CompanyDetailScreen({ route, navigation }) {
 
   // ─── CAROUSEL SYNC ────────────────────────────────────────────────────────────────
   const syncCarousel = async (newImages) => {
+    const previous = company?.carouselImages || [];
     applyUpdate((p) => ({ ...p, carouselImages: newImages }));
     try {
       await patchCompany(companyId, {
         carouselImages: newImages,
       });
-    } catch (_) {
-      Alert.alert(tr('error', 'Erreur'), tr('galleryUpdateError', 'Impossible de mettre a jour les images.'));
+    } catch (error) {
+      applyUpdate((p) => ({ ...p, carouselImages: previous }));
+      Alert.alert(
+        tr('error', 'Erreur'),
+        getApiErrorMessage(error, tr('galleryUpdateError', 'Impossible de mettre a jour les images.'))
+      );
     }
   };
 
@@ -1323,7 +1395,7 @@ export default function CompanyDetailScreen({ route, navigation }) {
       }
       setModalVisible(false);
     } catch (err) {
-      console.warn("saveService error:", err);
+          getApiErrorMessage(error, tr('saveError', 'Impossible de valider la fiche entreprise pour le moment.'))
       Alert.alert(tr('error', 'Erreur'), tr('serviceSaveError', 'Impossible de sauvegarder le service.'));
     } finally {
       setSaving(false);

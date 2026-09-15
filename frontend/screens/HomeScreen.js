@@ -45,6 +45,7 @@ import {
 import { resolveAvatarUri } from '../utils/profileUtils';
 import { getLocalizedNotificationCopy, getNotificationTagKey } from '../utils/notificationI18n';
 import { isCompanyPubliclyVisible } from '../utils/companyVisibility';
+import { resetRoot } from '../navigation/navigationRef';
 
 
 
@@ -2133,7 +2134,7 @@ export default function HomeScreen() {
 
     modeSwitchTimeoutRef.current = setTimeout(() => {
       setIsSwitchingMode(false);
-      navigation.navigate(nextRoute);
+      resetRoot(nextRoute);
     }, MODE_SWITCH_GIF_DURATION_MS);
   }, [isGuest, navigation, isProMode, isSwitchingMode]);
 

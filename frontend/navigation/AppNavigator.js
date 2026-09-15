@@ -62,14 +62,14 @@ const APP_MODE_STORAGE_KEY = '@goon:app-mode';
  * Tous les écrans ici affichent la tab bar.
  */
 function CompanyTabStack({ route }) {
-  const { companyId, currentUserId } = route.params || {};
+  const { companyId, currentUserId, onboardingFlow, justCreatedCompany } = route.params || {};
 
   return (
     <CompanyStack.Navigator screenOptions={{ headerShown: false }}>
       <CompanyStack.Screen
         name="CompanyOverview"
         component={CompanyDetailScreen}
-        initialParams={{ companyId, currentUserId }}
+        initialParams={{ companyId, currentUserId, onboardingFlow, justCreatedCompany }}
       />
       <CompanyStack.Screen name="ServiceDetail" component={ServiceDetailScreen} />
       <CompanyStack.Screen name="CreateAppointment" component={CreateAppointmentScreen} />
@@ -91,7 +91,7 @@ function MainTabs({ route }) {
     route?.params?.params ??
     route?.params;
 
-  const { companyId, currentUserId } = navParams || {};
+  const { companyId, currentUserId, onboardingFlow, justCreatedCompany } = navParams || {};
 
   return (
     <Tab.Navigator
@@ -124,6 +124,8 @@ function MainTabs({ route }) {
                 ...(props.route?.params || {}),
                 companyId,
                 currentUserId,
+                onboardingFlow,
+                justCreatedCompany,
               },
             }}
           />
@@ -169,14 +171,14 @@ function MainTabs({ route }) {
 }
 
 function ProCompanyTabStack({ route }) {
-  const { companyId, currentUserId } = route.params || {};
+  const { companyId, currentUserId, onboardingFlow, justCreatedCompany } = route.params || {};
 
   return (
     <CompanyStack.Navigator screenOptions={{ headerShown: false }}>
       <CompanyStack.Screen
         name="CompanyOverview"
         component={ProCompanyDetailScreen}
-        initialParams={{ companyId, currentUserId }}
+        initialParams={{ companyId, currentUserId, onboardingFlow, justCreatedCompany }}
       />
       <CompanyStack.Screen name="ServiceDetail" component={ProServiceDetailScreen} />
       <CompanyStack.Screen name="CreateAppointment" component={ProCreateAppointmentScreen} />
@@ -191,7 +193,7 @@ function ProMainTabs({ route }) {
     route?.params?.params ??
     route?.params;
 
-  const { companyId, currentUserId } = navParams || {};
+  const { companyId, currentUserId, onboardingFlow, justCreatedCompany } = navParams || {};
 
   return (
     <Tab.Navigator
@@ -224,6 +226,8 @@ function ProMainTabs({ route }) {
                 ...(props.route?.params || {}),
                 companyId,
                 currentUserId,
+                onboardingFlow,
+                justCreatedCompany,
               },
             }}
           />

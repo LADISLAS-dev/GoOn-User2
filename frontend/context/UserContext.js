@@ -888,6 +888,10 @@ export const UserProvider = ({ children }) => {
     setIsGuest(true);
   }, []);
 
+  const enterGuestMode = useCallback(() => {
+    continueAsGuest();
+  }, [continueAsGuest]);
+
   const deleteAccount = useCallback(async () => {
     const currentFirebaseUid = auth.currentUser?.uid || user?.firebaseUid || '';
     const currentEmail = auth.currentUser?.email || user?.email || '';
@@ -940,6 +944,7 @@ export const UserProvider = ({ children }) => {
         register,
         logout,
         continueAsGuest,
+        enterGuestMode,
         deleteAccount,
         updateUserProfile,
         refreshUserProfile,

@@ -11,19 +11,64 @@ const authMiddleware = require('../middleware/authMiddleware');
 const admin = require('../services/firebaseAdmin');
 const { storeUploadedFile } = require('../services/mediaStorage');
 
-function hasRequiredCompanyContent(company) {
-  const carouselCount = Array.isArray(company?.carouselImages) ? company.carouselImages.length : 0;
-  const servicesCount = Array.isArray(company?.services) ? company.services.length : 0;
-  return carouselCount >= 1 && servicesCount >= 2;
+function toAbsoluteMediaUrl(req, url) {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+
+  const host = req.get('x-forwarded-host') || req.get('host');
+  const proto = req.get('x-forwarded-proto') || req.protocol || 'https';
+  if (!host) return raw;
+
+  const normalizedPath = raw.startsWith('/') ? raw : `/${raw}`;
+  return `${proto}://${host}${normalizedPath}`;
 }
 
-function isCompanyValidated(company) {
-  const setupStatus = String(company?.setupStatus || '').toLowerCase();
-  return (
-    Boolean(company?.profileValidatedAt) ||
-    setupStatus === 'ready' ||
-    company?.isVerified === true
-  );
+async function resolveAuthenticatedOwnerId(req) {
+  const user = await User.findOne({ firebaseUid: req.user?.uid }).select('_id');
+  return user?._id || null;
+}
+
+// Résout l'id du propriétaire à partir du token (sans authMiddleware).
+// Retourne null si pas de token / token invalide / utilisateur inconnu.
+async function resolveOwnerIdFromToken(req) {
+  const raw = req.headers.authorization;
+  const token = raw?.split(' ')[1];
+  if (!token) return null;
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    const user = await User.findOne({ firebaseUid: decoded.uid }).select('_id');
+    return user?._id || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function resolveOwnedCompany(req, companyId) {
+  if (!mongoose.Types.ObjectId.isValid(companyId)) {
+    return { error: { status: 400, message: 'ID d\'entreprise invalide' } };
+  }
+
+  const ownerId = await resolveAuthenticatedOwnerId(req);
+  if (!ownerId) {
+    return { error: { status: 404, message: 'Utilisateur introuvable' } };
+  }
+
+  const company = await Company.findById(companyId);
+  if (!company) {
+    return { error: { status: 404, message: 'Entreprise non trouvée' } };
+  }
+
+  if (String(company.ownerId) !== String(ownerId)) {
+    return {
+      error: {
+        status: 403,
+        message: 'Accès refusé. Seul le propriétaire peut modifier cette entreprise.',
+      },
+    };
+  }
+
+  return { company, ownerId };
 }
 
 function buildPublicCompanyVisibilityFilter() {
@@ -31,57 +76,32 @@ function buildPublicCompanyVisibilityFilter() {
     $or: [
       { setupStatus: 'ready' },
       { profileValidatedAt: { $ne: null } },
-      { isVerified: true },
-      // Legacy compatibility: include potential public companies without explicit validation markers.
-      { isDraft: { $ne: true } },
     ],
   };
-}
-
-function isCompanyPubliclyVisible(company) {
-  if (!company || typeof company !== 'object') return false;
-  const hasRequiredContent = hasRequiredCompanyContent(company);
-  const validated = isCompanyValidated(company);
-
-  // Legacy fallback: if validation markers are missing but content is ready, keep public visibility.
-  if (!validated) {
-    return company?.isDraft !== true && hasRequiredContent;
-  }
-
-  // Backward compatibility: legacy validated companies may not have complete content yet.
-  if (company?.isVerified === true) return true;
-
-  return hasRequiredContent;
-}
-
-async function resolveAuthenticatedOwnerId(req) {
-  try {
-    const rawAuth = req.headers?.authorization || '';
-    const token = rawAuth.startsWith('Bearer ') ? rawAuth.slice(7).trim() : '';
-    if (!token) return null;
-
-    const decoded = await admin.auth().verifyIdToken(token);
-    if (!decoded?.uid) return null;
-
-    const user = await User.findOne({ firebaseUid: decoded.uid }).select('_id').lean();
-    return user?._id ? String(user._id) : null;
-  } catch (_) {
-    return null;
-  }
 }
 
 /* ──────────────────────────────────────────────
    POST /companies/upload-temp → upload temporaire d'image
 ────────────────────────────────────────────── */
-router.post('/upload-temp', upload.single('image'), async (req, res) => {
+router.post('/upload-temp', authMiddleware, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'Aucun fichier reçu' });
     }
-    const url = await storeUploadedFile(req.file, {
+    const storedUrl = await storeUploadedFile(req.file, {
       folder: 'goon/companies',
       localPrefix: '/uploads/',
     });
+    const url = toAbsoluteMediaUrl(req, storedUrl);
+
+    // In production, local filesystem URLs are not durable across restarts.
+    if (process.env.NODE_ENV === 'production' && String(storedUrl || '').startsWith('/uploads/')) {
+      return res.status(500).json({
+        error: 'Stockage media indisponible en mode persistant. Verifiez la configuration Cloudinary.',
+        code: 'MEDIA_PERSISTENCE_NOT_CONFIGURED',
+      });
+    }
+
     res.json({
       url,
     });
@@ -93,15 +113,30 @@ router.post('/upload-temp', upload.single('image'), async (req, res) => {
 /* ──────────────────────────────────────────────
    POST /companies/:id/upload-image → upload d'image pour une entreprise existante
 ────────────────────────────────────────────── */
-router.post('/:id/upload-image', upload.single('image'), async (req, res) => {
+router.post('/:id/upload-image', authMiddleware, upload.single('image'), async (req, res) => {
   try {
+    const owned = await resolveOwnedCompany(req, req.params.id);
+    if (owned.error) {
+      return res.status(owned.error.status).json({ error: owned.error.message });
+    }
+
     if (!req.file) {
       return res.status(400).json({ error: 'Aucun fichier reçu' });
     }
-    const url = await storeUploadedFile(req.file, {
+    const storedUrl = await storeUploadedFile(req.file, {
       folder: 'goon/companies',
       localPrefix: '/uploads/',
     });
+    const url = toAbsoluteMediaUrl(req, storedUrl);
+
+    // In production, local filesystem URLs are not durable across restarts.
+    if (process.env.NODE_ENV === 'production' && String(storedUrl || '').startsWith('/uploads/')) {
+      return res.status(500).json({
+        error: 'Stockage media indisponible en mode persistant. Verifiez la configuration Cloudinary.',
+        code: 'MEDIA_PERSISTENCE_NOT_CONFIGURED',
+      });
+    }
+
     res.json({
       url,
     });
@@ -113,8 +148,13 @@ router.post('/:id/upload-image', upload.single('image'), async (req, res) => {
 /* ──────────────────────────────────────────────
    POST /companies/:id/upload-media → upload image/video pour une entreprise existante
 ────────────────────────────────────────────── */
-router.post('/:id/upload-media', mediaUpload.single('media'), async (req, res) => {
+router.post('/:id/upload-media', authMiddleware, mediaUpload.single('media'), async (req, res) => {
   try {
+    const owned = await resolveOwnedCompany(req, req.params.id);
+    if (owned.error) {
+      return res.status(owned.error.status).json({ error: owned.error.message });
+    }
+
     if (!req.file) {
       return res.status(400).json({ error: 'Aucun fichier reçu' });
     }
@@ -122,10 +162,19 @@ router.post('/:id/upload-media', mediaUpload.single('media'), async (req, res) =
     const mime = req.file?.mimetype || '';
     const resourceType = mime.startsWith('video/') ? 'video' : 'image';
 
-    const url = await storeUploadedFile(req.file, {
+    const storedUrl = await storeUploadedFile(req.file, {
       folder: 'goon/companies',
       localPrefix: '/uploads/',
     });
+    const url = toAbsoluteMediaUrl(req, storedUrl);
+
+    // In production, local filesystem URLs are not durable across restarts.
+    if (process.env.NODE_ENV === 'production' && String(storedUrl || '').startsWith('/uploads/')) {
+      return res.status(500).json({
+        error: 'Stockage media indisponible en mode persistant. Verifiez la configuration Cloudinary.',
+        code: 'MEDIA_PERSISTENCE_NOT_CONFIGURED',
+      });
+    }
 
     res.json({
       url,
@@ -158,19 +207,38 @@ router.post('/', authMiddleware, upload.array('images', 10), async (req, res) =>
         )
       : [];
 
-    // Récupérer l'utilisateur connecté
-    const user = await User.findOne({ firebaseUid: req.user.uid });
-    const ownerIdFromBody = String(req.body?.ownerId || req.body?.ownerid || '').trim();
-    let resolvedOwnerId = user?._id;
+    // Récupérer (ou créer) l'utilisateur connecté pour garantir un ownerId cohérent.
+    let user = await User.findOne({ firebaseUid: req.user.uid });
 
-    if (!resolvedOwnerId && ownerIdFromBody && mongoose.Types.ObjectId.isValid(ownerIdFromBody)) {
-      resolvedOwnerId = ownerIdFromBody;
-      console.warn('⚠️ Using ownerId fallback from request body for company creation:', ownerIdFromBody);
+    if (!user) {
+      const fallbackName = String(req.user?.name || 'User').trim() || 'User';
+      const fallbackEmail = String(
+        req.user?.email || `${req.user.uid}@firebase.local`
+      ).trim().toLowerCase();
+
+      user = await User.findOneAndUpdate(
+        { firebaseUid: req.user.uid },
+        {
+          $setOnInsert: {
+            firebaseUid: req.user.uid,
+            name: fallbackName,
+            email: fallbackEmail,
+          },
+        },
+        {
+          new: true,
+          upsert: true,
+          runValidators: false,
+          setDefaultsOnInsert: true,
+        }
+      );
+      console.warn('⚠️ Auto-created missing user profile for company owner:', req.user.uid);
     }
 
+    const resolvedOwnerId = user?._id;
     if (!resolvedOwnerId) {
-      console.error('❌ User not found for UID and no valid ownerId fallback:', req.user.uid);
-      return res.status(404).json({ error: 'Utilisateur non trouvé' });
+      console.error('❌ Owner resolution failed for UID:', req.user.uid);
+      return res.status(500).json({ error: 'Impossible de resoudre le proprietaire' });
     }
     console.log('✅ Owner resolved:', resolvedOwnerId);
 
@@ -184,6 +252,7 @@ router.post('/', authMiddleware, upload.array('images', 10), async (req, res) =>
       location, 
       categoryId, 
       categoryIds,
+      isVerified, 
       logo,
       backgroundImage,
       latitude,
@@ -234,12 +303,10 @@ router.post('/', authMiddleware, upload.array('images', 10), async (req, res) =>
       longitude: longitude ? parseFloat(longitude) : undefined,
       categoryId: primaryCategoryId,
       categoryIds: normalizedCategoryIds,
-      // New companies always start private until validation/approval.
-      isDraft: true,
-      isVerified: false,
+      isVerified: isVerified === 'true' || isVerified === true,
+      ownerId: resolvedOwnerId,
       setupStatus: 'draft',
       profileValidatedAt: null,
-      ownerId: resolvedOwnerId,
       logo: logo || '',
       backgroundImage: backgroundImage || '',
       images: imagePaths,
@@ -263,84 +330,131 @@ router.post('/', authMiddleware, upload.array('images', 10), async (req, res) =>
 ────────────────────────────────────────────── */
 router.get('/', async (req, res) => {
   try {
-    const scope = String(req.query?.scope || '').trim().toLowerCase();
-    const isPublicScope = !scope || scope === 'all';
-
-    const visibilityMatch = buildPublicCompanyVisibilityFilter();
-    const companies = await Company.find(visibilityMatch)
-      .sort({ createdAt: -1 })
-      .lean();
-
-    const publicCompanies = isPublicScope
-      ? companies.filter(isCompanyPubliclyVisible)
-      : companies;
-
-    if (!publicCompanies.length) {
-      return res.json({ success: true, data: [] });
+    const scope = String(req.query?.scope || '').toLowerCase();
+    const compact = ['1', 'true', 'yes'].includes(String(req.query?.compact || '').toLowerCase());
+    if (scope === 'owned') {
+      // Entreprises appartenant à l'utilisateur connecté (y compris brouillons)
+      const raw = req.headers.authorization;
+      const token = raw?.split(' ')[1];
+      if (!token) {
+        return res.status(401).json({ error: 'No token provided' });
+      }
+      let uid;
+      try {
+        const decoded = await admin.auth().verifyIdToken(token);
+        uid = decoded.uid;
+      } catch (err) {
+        return res.status(401).json({ error: 'Invalid token' });
+      }
+      const user = await User.findOne({ firebaseUid: uid });
+      if (!user) {
+        return res.status(404).json({ error: 'Utilisateur introuvable' });
+      }
+      const ownedQuery = Company.find({ ownerId: user._id }).sort({ createdAt: -1 });
+      if (compact) {
+        ownedQuery.select('_id name logo ownerId createdAt');
+      }
+      const ownedData = await ownedQuery.lean();
+      return res.json({ success: true, data: ownedData });
     }
+    if (scope === 'all') {
+      const companyQuery = Company.find(buildPublicCompanyVisibilityFilter()).sort({ createdAt: -1 });
+      if (compact) {
+        companyQuery.select('_id name logo ownerId createdAt');
+      }
 
-    const companyIds = publicCompanies
-      .map((company) => company?._id)
-      .filter(Boolean);
+      const companies = await companyQuery.lean();
+      const companyIds = companies
+        .map((company) => company?._id)
+        .filter(Boolean);
 
-    const aggregated = await AppointmentAppreciation.aggregate([
-      { $match: { companyId: { $in: companyIds } } },
-      {
-        $group: {
-          _id: '$companyId',
-          total: { $sum: 1 },
-          likes: {
-            $sum: {
-              $cond: [{ $eq: ['$liked', true] }, 1, 0],
+      if (!companyIds.length) {
+        return res.json({ success: true, data: [] });
+      }
+
+      const aggregated = await AppointmentAppreciation.aggregate([
+        { $match: { companyId: { $in: companyIds } } },
+        {
+          $group: {
+            _id: '$companyId',
+            total: { $sum: 1 },
+            likes: {
+              $sum: {
+                $cond: [{ $eq: ['$liked', true] }, 1, 0],
+              },
             },
-          },
-          dislikes: {
-            $sum: {
-              $cond: [{ $eq: ['$liked', false] }, 1, 0],
+            dislikes: {
+              $sum: {
+                $cond: [{ $eq: ['$liked', false] }, 1, 0],
+              },
             },
-          },
-          ratingsSum: {
-            $sum: {
-              $cond: [{ $gt: ['$rating', 0] }, '$rating', 0],
+            ratingsSum: {
+              $sum: {
+                $cond: [{ $gt: ['$rating', 0] }, '$rating', 0],
+              },
             },
-          },
-          ratingsCount: {
-            $sum: {
-              $cond: [{ $gt: ['$rating', 0] }, 1, 0],
+            ratingsCount: {
+              $sum: {
+                $cond: [{ $gt: ['$rating', 0] }, 1, 0],
+              },
             },
           },
         },
-      },
-    ]);
+      ]);
 
-    const summaryByCompanyId = new Map(
-      aggregated.map((item) => {
-        const averageRating = item.ratingsCount > 0
-          ? Number((item.ratingsSum / item.ratingsCount).toFixed(2))
-          : null;
+      const summaryByCompanyId = new Map(
+        aggregated.map((item) => {
+          const averageRating = item.ratingsCount > 0
+            ? Number((item.ratingsSum / item.ratingsCount).toFixed(2))
+            : null;
 
-        return [
-          String(item._id),
-          {
-            total: item.total || 0,
-            likes: item.likes || 0,
-            dislikes: item.dislikes || 0,
-            averageRating,
-          },
-        ];
-      })
-    );
+          return [
+            String(item._id),
+            {
+              total: item.total || 0,
+              likes: item.likes || 0,
+              dislikes: item.dislikes || 0,
+              averageRating,
+            },
+          ];
+        })
+      );
 
-    const data = publicCompanies.map((company) => ({
-      ...company,
-      appreciationSummary: summaryByCompanyId.get(String(company._id)) || {
-        total: 0,
-        likes: 0,
-        dislikes: 0,
-        averageRating: null,
-      },
-    }));
+      const data = companies.map((company) => {
+        const appreciationSummary = summaryByCompanyId.get(String(company._id)) || {
+          total: 0,
+          likes: 0,
+          dislikes: 0,
+          averageRating: null,
+        };
 
+        if (compact) {
+          return {
+            _id: company._id,
+            name: company.name,
+            logo: company.logo,
+            ownerId: company.ownerId,
+            createdAt: company.createdAt,
+            appreciationSummary,
+          };
+        }
+
+        return {
+          ...company,
+          appreciationSummary,
+        };
+      });
+
+      return res.json({ success: true, data });
+    }
+
+    // Sans scope → retourne toutes les entreprises publiques
+    const allQuery = Company.find(buildPublicCompanyVisibilityFilter()).sort({ createdAt: -1 });
+    if (compact) {
+      allQuery.select('_id name logo ownerId createdAt');
+    }
+
+    const data = await allQuery.lean();
     res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -352,27 +466,19 @@ router.get('/', async (req, res) => {
 ────────────────────────────────────────────── */
 router.get('/category/:id', async (req, res) => {
   try {
-    const visibilityMatch = buildPublicCompanyVisibilityFilter();
-
     const companies = await Company.find({
-      $and: [
-        {
-          $or: [
-            { categoryId: req.params.id },
-            { categoryIds: req.params.id },
-          ],
-        },
-        visibilityMatch,
+      ...buildPublicCompanyVisibilityFilter(),
+      $or: [
+        { categoryId: req.params.id },
+        { categoryIds: req.params.id },
       ],
     }).lean();
 
-    const publicCompanies = companies.filter(isCompanyPubliclyVisible);
-
-    if (!publicCompanies.length) {
+    if (!companies.length) {
       return res.json([]);
     }
 
-    const companyIds = publicCompanies
+    const companyIds = companies
       .map((company) => company?._id)
       .filter(Boolean);
 
@@ -424,7 +530,7 @@ router.get('/category/:id', async (req, res) => {
       })
     );
 
-    const payload = publicCompanies.map((company) => ({
+    const payload = companies.map((company) => ({
       ...company,
       appreciationSummary: summaryByCompanyId.get(String(company._id)) || {
         total: 0,
@@ -466,16 +572,18 @@ router.get('/me', authMiddleware, async (req, res) => {
 ────────────────────────────────────────────── */
 router.get('/:id', async (req, res) => {
   try {
-    const requesterOwnerId = await resolveAuthenticatedOwnerId(req);
+    const requesterOwnerId = await resolveOwnerIdFromToken(req);
     const company = await Company.findById(req.params.id)
       .populate('ownerId', 'name email avatar');
     if (!company) return res.status(404).json({ error: 'Entreprise introuvable' });
 
     const companyOwnerId = String(company?.ownerId?._id || company?.ownerId || '');
     const isOwner = requesterOwnerId && String(requesterOwnerId) === companyOwnerId;
-    const isPublic = isCompanyPubliclyVisible(company);
+    const isPubliclyVisible =
+      company.setupStatus === 'ready' ||
+      Boolean(company.profileValidatedAt);
 
-    if (!isOwner && !isPublic) {
+    if (!isOwner && !isPubliclyVisible) {
       return res.status(404).json({ error: 'Entreprise introuvable' });
     }
 
@@ -543,23 +651,35 @@ router.patch('/:id', authMiddleware, async (req, res) => {
     const { id } = req.params;
     const userId = req.user.uid;
 
-    const authUser = await User.findOne({ firebaseUid: userId }).select('_id');
-    if (!authUser) {
-      return res.status(404).json({ error: 'Utilisateur introuvable' });
-    }
-
     // Validation de l'ID
     if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
       return res.status(400).json({ error: 'ID d\'entreprise invalide' });
     }
 
     // Vérifier la propriété
-    const company = await Company.findById(id);
+    // Ne pas dépendre de populate() ici: si la relation User est incomplète,
+    // populate peut masquer ownerId et provoquer des faux "access denied".
+    const company = await Company.findById(id).select('ownerId');
     if (!company) {
       return res.status(404).json({ error: 'Entreprise non trouvée' });
     }
 
-    if (String(company.ownerId) !== String(authUser._id)) {
+    const ownerObjectId = String(company?.ownerId || '');
+    let ownerFirebaseUid = '';
+
+    if (company?.ownerId) {
+      const ownerUser = await User.findById(company.ownerId).select('firebaseUid');
+      ownerFirebaseUid = String(ownerUser?.firebaseUid || '');
+    }
+
+    let isOwner = ownerFirebaseUid && ownerFirebaseUid === String(userId);
+
+    if (!isOwner) {
+      const authUser = await User.findOne({ firebaseUid: userId }).select('_id');
+      isOwner = !!authUser && String(authUser._id) === ownerObjectId;
+    }
+
+    if (!isOwner) {
       console.warn(`⚠️ Accès refusé: Utilisateur ${userId} tente de modifier l'entreprise ${id} de ${company.ownerId}`);
       return res.status(403).json({ error: 'Accès refusé. Seul le propriétaire peut modifier cette entreprise.' });
     }
@@ -567,8 +687,29 @@ router.patch('/:id', authMiddleware, async (req, res) => {
     // Construire le payload
     const payload = { ...req.body };
 
+    // Backward compatibility with legacy clients sending `images` for gallery.
+    if (payload.galleryImages === undefined && Array.isArray(payload.images)) {
+      payload.galleryImages = payload.images;
+    }
+
     // Valider et normaliser les champs modifiables
-    const allowedFields = ['name', 'description', 'phone', 'email', 'website', 'location', 'categoryId', 'categoryIds', 'backgroundImage'];
+    const allowedFields = [
+      'name',
+      'description',
+      'phone',
+      'email',
+      'website',
+      'location',
+      'categoryId',
+      'categoryIds',
+      'logo',
+      'backgroundImage',
+      'carouselImages',
+      'galleryImages',
+      'services',
+      'setupStatus',
+      'profileValidatedAt',
+    ];
     const filteredPayload = {};
 
     allowedFields.forEach((field) => {
@@ -576,6 +717,36 @@ router.patch('/:id', authMiddleware, async (req, res) => {
         filteredPayload[field] = payload[field];
       }
     });
+
+    // Normalize media arrays to avoid malformed payloads replacing data unexpectedly.
+    if (filteredPayload.carouselImages !== undefined) {
+      filteredPayload.carouselImages = Array.isArray(filteredPayload.carouselImages)
+        ? filteredPayload.carouselImages.map((item) => String(item || '').trim()).filter(Boolean)
+        : [];
+    }
+
+    if (filteredPayload.galleryImages !== undefined) {
+      filteredPayload.galleryImages = Array.isArray(filteredPayload.galleryImages)
+        ? filteredPayload.galleryImages.map((item) => String(item || '').trim()).filter(Boolean)
+        : [];
+    }
+
+    if (process.env.DEBUG_MEDIA === 'true') {
+      console.log('[company patch debug]', {
+        companyId: id,
+        bodyKeys: Object.keys(payload || {}),
+        filteredKeys: Object.keys(filteredPayload || {}),
+        galleryCount: Array.isArray(filteredPayload.galleryImages) ? filteredPayload.galleryImages.length : null,
+        carouselCount: Array.isArray(filteredPayload.carouselImages) ? filteredPayload.carouselImages.length : null,
+      });
+    }
+
+    if (!Object.keys(filteredPayload).length) {
+      return res.status(400).json({
+        error: 'Aucun champ modifiable fourni',
+        code: 'NO_MUTABLE_FIELDS',
+      });
+    }
 
     // Traitement des catégories
     if (filteredPayload.categoryId !== undefined || filteredPayload.categoryIds !== undefined) {
@@ -604,6 +775,27 @@ router.patch('/:id', authMiddleware, async (req, res) => {
 
       filteredPayload.categoryId = primaryCategoryId;
       filteredPayload.categoryIds = normalizedCategoryIds;
+    }
+
+    // Visibility workflow normalization.
+    // Frontend validates with setupStatus="ready" and profileValidatedAt set.
+    if (filteredPayload.setupStatus !== undefined || filteredPayload.profileValidatedAt !== undefined) {
+      const normalizedSetupStatus = String(filteredPayload.setupStatus || '').trim().toLowerCase();
+      const hasValidationDate =
+        filteredPayload.profileValidatedAt !== null &&
+        String(filteredPayload.profileValidatedAt || '').trim() !== '';
+
+      if (normalizedSetupStatus === 'ready' || hasValidationDate) {
+        filteredPayload.setupStatus = 'ready';
+        filteredPayload.profileValidatedAt = hasValidationDate
+          ? new Date(filteredPayload.profileValidatedAt)
+          : new Date();
+        filteredPayload.isDraft = false;
+      } else {
+        filteredPayload.setupStatus = 'draft';
+        filteredPayload.profileValidatedAt = null;
+        filteredPayload.isDraft = true;
+      }
     }
 
     // Mettre à jour
@@ -692,10 +884,13 @@ router.delete('/:id', authMiddleware, async (req, res) => {
 /* ──────────────────────────────────────────────
    POST /companies/:id/services → ajouter un service
 ────────────────────────────────────────────── */
-router.post('/:id/services', async (req, res) => {
+router.post('/:id/services', authMiddleware, async (req, res) => {
   try {
-    const company = await Company.findById(req.params.id);
-    if (!company) return res.status(404).json({ error: 'Entreprise introuvable' });
+    const owned = await resolveOwnedCompany(req, req.params.id);
+    if (owned.error) {
+      return res.status(owned.error.status).json({ error: owned.error.message });
+    }
+    const company = owned.company;
 
     const { name, price, image, video, description } = req.body;
     company.services.push({ name, price, image, video, description });
@@ -711,10 +906,13 @@ router.post('/:id/services', async (req, res) => {
 /* ──────────────────────────────────────────────
    PATCH /companies/:id/services/:serviceId → modifier un service
 ────────────────────────────────────────────── */
-router.patch('/:id/services/:serviceId', async (req, res) => {
+router.patch('/:id/services/:serviceId', authMiddleware, async (req, res) => {
   try {
-    const company = await Company.findById(req.params.id);
-    if (!company) return res.status(404).json({ error: 'Entreprise introuvable' });
+    const owned = await resolveOwnedCompany(req, req.params.id);
+    if (owned.error) {
+      return res.status(owned.error.status).json({ error: owned.error.message });
+    }
+    const company = owned.company;
 
     const service = company.services.id(req.params.serviceId);
     if (!service) return res.status(404).json({ error: 'Service introuvable' });
@@ -736,10 +934,13 @@ router.patch('/:id/services/:serviceId', async (req, res) => {
 /* ──────────────────────────────────────────────
    DELETE /companies/:id/services/:serviceId → supprimer un service
 ────────────────────────────────────────────── */
-router.delete('/:id/services/:serviceId', async (req, res) => {
+router.delete('/:id/services/:serviceId', authMiddleware, async (req, res) => {
   try {
-    const company = await Company.findById(req.params.id);
-    if (!company) return res.status(404).json({ error: 'Entreprise introuvable' });
+    const owned = await resolveOwnedCompany(req, req.params.id);
+    if (owned.error) {
+      return res.status(owned.error.status).json({ error: owned.error.message });
+    }
+    const company = owned.company;
 
     company.services = company.services.filter(
       s => s._id.toString() !== req.params.serviceId

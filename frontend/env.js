@@ -20,6 +20,10 @@ const shouldUseLocalApi =
 	toBoolean(process.env.EXPO_PUBLIC_USE_LOCAL_API) ||
 	toBoolean(Constants.expoConfig?.extra?.useLocalApi);
 
+const forceProductionApi =
+	toBoolean(process.env.EXPO_PUBLIC_FORCE_PROD_API) ||
+	toBoolean(Constants.expoConfig?.extra?.forceProdApi);
+
 export const API_URL = (() => {
 	const explicitUrl =
 		process.env.EXPO_PUBLIC_API_URL ||
@@ -32,10 +36,16 @@ export const API_URL = (() => {
 	}
 
 	const expoHost = resolveExpoHost();
-	if (expoHost) {
+	const shouldUseDevLocal = typeof __DEV__ !== 'undefined' && __DEV__ && !forceProductionApi;
+
+	if (expoHost && (shouldUseLocalApi || shouldUseDevLocal)) {
 		const localUrl = `http://${expoHost}:3000`;
-		console.log('🌐 API_URL from expoHost:', localUrl);
+		console.log('🌐 API_URL from expoHost (local):', localUrl);
 		return localUrl;
+	}
+
+	if (expoHost && !shouldUseLocalApi) {
+		console.log('🌐 API_URL local disabled, using production fallback');
 	}
 
 	console.log('🌐 API_URL fallback to production');

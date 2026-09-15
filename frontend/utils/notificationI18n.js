@@ -452,3 +452,29 @@ export function getNotificationTagKey(notification) {
   if (status === 'rejected') return 'rejected';
   return 'bookings';
 }
+
+export function localizeNotificationContent(notification, language) {
+  return getLocalizedNotificationCopy(notification, language, {
+    senderName: notification?.senderId?.name || '',
+    fallbackTitle: notification?.title || '',
+    fallbackMessage: notification?.message || '',
+  });
+}
+
+export function localizeNotificationTag(metaKey, t) {
+  const normalized = String(metaKey || '').toLowerCase();
+
+  if (normalized === 'message' || normalized === 'messages') {
+    return t('messages', 'Messages');
+  }
+
+  if (normalized === 'accepted') {
+    return t('accepted', 'Accepted');
+  }
+
+  if (normalized === 'rejected') {
+    return t('rejected', 'Rejected');
+  }
+
+  return t('bookings', 'Bookings');
+}

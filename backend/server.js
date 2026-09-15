@@ -13,6 +13,7 @@ const appointmentRoutes = require('./routes/appointmentRoutes');
 const companyRoutes = require('./routes/companyRoutes');
 const messageRoutes = require('./routes/messageRoutes');
 const bannerRoutes = require('./routes/bannerRoutes');
+const reportRoutes = require('./routes/reportRoutes');
 const authMiddleware = require('./middleware/authMiddleware');
 const { startAppointmentReminderService } = require('./services/appointmentReminderService');
 const { startNotificationDigestService } = require('./services/notificationDigestService');
@@ -35,6 +36,7 @@ app.use('/appointments', appointmentRoutes);
 app.use('/companies', companyRoutes);
 app.use('/messages', messageRoutes);
 app.use('/banners', bannerRoutes);
+app.use('/reports', reportRoutes);
 
 /* ================= HEALTH ================= */
 app.get('/', (req, res) => {
