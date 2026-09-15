@@ -25,7 +25,6 @@ import { API_URL } from '../env';
 import { auth } from '../services/firebase';
 import { isLocalAssetUri } from '../utils/profileUtils';
 import { getCategoryLabel } from '../utils/categoryLabels';
-import { resetRoot } from '../navigation/navigationRef';
 
 const C = {
   purple:       '#8B2FC9',
@@ -431,14 +430,28 @@ export default function CreateCompanyScreen() {
           {
             text: 'OK',
             onPress: () => {
-                // Ouvrir directement la page entreprise du mode Pro.
-                // C'est plus stable que de passer par un nested reset de tabs.
-                resetRoot('MyCompany', {
-                  companyId: newCompanyId,
-                  currentUserId: user?._id || null,
-                  onboardingFlow: true,
-                  justCreatedCompany: true,
-                });
+              // Amener l'utilisateur sur la page de son entreprise
+              // pour finaliser la création et valider le profil.
+              navigation.reset({
+                index: 0,
+                routes: [
+                  {
+                    name: 'MainTabs',
+                    params: {
+                      screen: 'CompanyHome',
+                      params: {
+                        screen: 'CompanyOverview',
+                        params: {
+                          companyId: newCompanyId,
+                          currentUserId: user?._id || null,
+                          onboardingFlow: true,
+                          justCreatedCompany: true,
+                        },
+                      },
+                    },
+                  },
+                ],
+              });
             },
           },
         ]

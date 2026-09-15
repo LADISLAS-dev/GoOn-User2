@@ -17,7 +17,7 @@ const resolveExpoHost = () => {
 
 // 🔥 BASE URL UNIQUE
 const API = (() => {
-  const url = (API_URL || 'https://goon-user.onrender.com').replace(/\/$/, '');
+  const url = (API_URL || 'https://goon-user2.onrender.com').replace(/\/$/, '');
   console.log('✅ API endpoint:', url);
   return url;
 })();

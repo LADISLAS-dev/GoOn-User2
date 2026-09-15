@@ -190,7 +190,7 @@ const getLocalizedValue = (valuesByLanguage, language) => {
 const FEATURED_COLORS = ['#E8402A', C.purple, '#2ECC71', C.blue, '#F39C12', '#14B8A6', '#E11D48'];
 const FEATURED_COMPANIES_CACHE_KEY = '@goon:featured-companies-cache';
 const APP_MODE_STORAGE_KEY = '@goon:app-mode';
-const MODE_SWITCH_GIF_DURATION_MS = 4400;
+const MODE_SWITCH_GIF_DURATION_MS = 1400;
 const INLINE_BANNER_VIDEO_ENABLED = true;
 
 

@@ -45,7 +45,6 @@ import {
 import { resolveAvatarUri } from '../utils/profileUtils';
 import { getLocalizedNotificationCopy, getNotificationTagKey } from '../utils/notificationI18n';
 import { isCompanyPubliclyVisible } from '../utils/companyVisibility';
-import { resetRoot } from '../navigation/navigationRef';
 
 
 
@@ -978,7 +977,7 @@ const CATEGORY_LABELS = {
 const FEATURED_COLORS = ['#E8402A', C.purple, '#2ECC71', C.blue, '#F39C12', '#14B8A6', '#E11D48'];
 const FEATURED_COMPANIES_CACHE_KEY = '@goon:featured-companies-cache';
 const APP_MODE_STORAGE_KEY = '@goon:app-mode';
-const MODE_SWITCH_GIF_DURATION_MS = 4400;
+const MODE_SWITCH_GIF_DURATION_MS = 1400;
 const INLINE_BANNER_VIDEO_ENABLED = true;
 const APP_STORE_URL = 'https://apps.apple.com/app/id6783525610';
 const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.notificationapp.test';
@@ -2134,7 +2133,7 @@ export default function HomeScreen() {
 
     modeSwitchTimeoutRef.current = setTimeout(() => {
       setIsSwitchingMode(false);
-      resetRoot(nextRoute);
+      navigation.navigate(nextRoute);
     }, MODE_SWITCH_GIF_DURATION_MS);
   }, [isGuest, navigation, isProMode, isSwitchingMode]);
 

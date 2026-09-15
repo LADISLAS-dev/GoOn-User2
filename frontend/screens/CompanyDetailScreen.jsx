@@ -991,7 +991,14 @@ export default function CompanyDetailScreen({ route, navigation }) {
         <View style={styles.headerRow}>
           <TouchableOpacity
             style={styles.iconBtn}
-            onPress={() => navigation.goBack()}
+            onPress={() => {
+              if (navigation?.canGoBack?.()) {
+                navigation.goBack();
+                return;
+              }
+
+              navigation.navigate('UserHome');
+            }}
           >
             <Text style={styles.iconText}>‹</Text>
           </TouchableOpacity>
