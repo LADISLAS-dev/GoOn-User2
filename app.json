@@ -4,7 +4,7 @@
     "slug": "goon-guest-mode",
     "version": "2.0.0",
     "orientation": "portrait",
-    "icon": "./frontend/assets/icon.png",
+    "icon": "./frontend/assets/icon1.png",
     "userInterfaceStyle": "light",
     "scheme": "goon",
     "splash": {

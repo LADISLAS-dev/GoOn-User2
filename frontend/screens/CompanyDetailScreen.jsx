@@ -23,7 +23,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { Share } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import api, { getCompanyById } from "../services/api";
+import api, { getCompanyById, getPublicRestaurantMenu } from "../services/api";
 import { useUser } from "../context/UserContext";
 import AuthPromptModal from "../components/AuthPromptModal";
 import { useLanguage } from "../context/LanguageContext";
@@ -31,6 +31,9 @@ import { auth } from '../services/firebase';
 import { API_URL } from '../env';
 import { isLocalAssetUri, resolveAvatarUri } from "../utils/profileUtils";
 import { isCompanyPubliclyVisible } from '../utils/companyVisibility';
+import { useBusinessTypes } from '../hooks/useBusinessTypes';
+import { CompanyCategoryCover, CompanyCategoryPhotoBadge, getCompanyCategoryVisual } from '../components/CompanyCategoryVisual';
+import PublicRestaurantMenuExperience from '../components/PublicRestaurantMenuExperience';
 import { LayoutAnimation, UIManager } from "react-native";
 import { Animated } from "react-native";
 import { BlurView } from "expo-blur";
@@ -377,7 +380,8 @@ const buildCarouselMediaSource = (rawValue = "") => {
 export default function CompanyDetailScreen({ route, navigation }) {
   const { user, isGuest } = useUser();
   const [showAuthPrompt, setShowAuthPrompt] = useState(false);
-  const { t } = useLanguage();
+  const { t, activeLanguage } = useLanguage();
+  const businessTypes = useBusinessTypes(CATEGORIES, activeLanguage);
   const rawCompanyId =
     route?.params?.companyId ??
     route?.params?.id ??
@@ -388,6 +392,10 @@ export default function CompanyDetailScreen({ route, navigation }) {
   const currentUserId = route?.params?.currentUserId ?? user?._id;
 
   const [company, setCompany] = useState(null);
+  const [publicMenu, setPublicMenu] = useState([]);
+  const [publicPaymentOptions, setPublicPaymentOptions] = useState({ stripe: false, paypal: false });
+  const [menuLoading, setMenuLoading] = useState(false);
+  const [menuError, setMenuError] = useState('');
   const [loading, setLoading] = useState(true);
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [activeTab, setActiveTab] = useState("services");
@@ -430,11 +438,50 @@ export default function CompanyDetailScreen({ route, navigation }) {
   const services = company?.services || [];
   const selectedCategoryLabels = selectedCategoryIds
     .map((id) => {
-      const category = CATEGORIES.find((cat) => cat.id === id);
+      const category = businessTypes.find((cat) => cat.id === id);
       if (!category) return null;
-      return t(`category_${category.id}`, category.label);
+      return category.label;
     })
     .filter(Boolean);
+  const primaryCategoryId = normalizeCompanyCategories(company)[0] || '';
+  const isRestaurantBusiness = normalizeCompanyCategories(company).includes('2');
+  const categoryVisual = getCompanyCategoryVisual(primaryCategoryId, businessTypes, t('categories', 'Business'));
+  useEffect(() => {
+    let isCurrent = true;
+    if (!isRestaurantBusiness || !companyId) {
+      setPublicMenu([]);
+      setPublicPaymentOptions({ stripe: false, paypal: false });
+      setMenuError('');
+      setMenuLoading(false);
+      return () => { isCurrent = false; };
+    }
+
+    setMenuLoading(true);
+    setMenuError('');
+    getPublicRestaurantMenu(companyId, { page: 1, limit: 100 })
+      .then((response) => {
+        if (isCurrent) {
+          setPublicMenu(response?.data || []);
+          setPublicPaymentOptions(response?.paymentOptions || { stripe: false, paypal: false });
+        }
+      })
+      .catch(() => {
+        if (isCurrent) {
+          setPublicMenu([]);
+          setPublicPaymentOptions({ stripe: false, paypal: false });
+          setMenuError(activeLanguage === 'fr' ? 'Menu temporairement indisponible.' : 'Menu temporarily unavailable.');
+        }
+      })
+      .finally(() => {
+        if (isCurrent) setMenuLoading(false);
+      });
+    return () => { isCurrent = false; };
+  }, [companyId, isRestaurantBusiness, activeLanguage]);
+
+  useEffect(() => {
+    if (isRestaurantBusiness) setActiveTab('menu');
+    else if (activeTab === 'menu') setActiveTab('services');
+  }, [isRestaurantBusiness, activeTab]);
   const ownerId =
     typeof company?.ownerId === "object"
       ? company?.ownerId?._id
@@ -983,11 +1030,11 @@ export default function CompanyDetailScreen({ route, navigation }) {
 
   return (
     <>
-      <View style={styles.root}>
+      <View style={[styles.root, isRestaurantBusiness && styles.restaurantRoot]}>
       <StatusBar barStyle="light-content" backgroundColor={PURPLE} />
 
       {/* HEADER */}
-      <SafeAreaView style={styles.header} edges={["top"]}>
+      <SafeAreaView style={[styles.header, isRestaurantBusiness && styles.restaurantHeader]} edges={["top"]}>
         <View style={styles.headerRow}>
           <TouchableOpacity
             style={styles.iconBtn}
@@ -1024,6 +1071,7 @@ export default function CompanyDetailScreen({ route, navigation }) {
       <ScrollView
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        contentContainerStyle={[styles.scrollContent, isRestaurantBusiness && styles.restaurantScrollContent]}
       >
         {/* CAROUSEL */}
         <View>
@@ -1082,6 +1130,7 @@ export default function CompanyDetailScreen({ route, navigation }) {
                         style={styles.carouselImg}
                       />
                     )}
+                    <CompanyCategoryPhotoBadge visual={categoryVisual} />
                     {/* <TouchableOpacity
                       style={styles.editImgBtn}
                       onPress={() => editCarouselImage(i)}
@@ -1126,11 +1175,12 @@ export default function CompanyDetailScreen({ route, navigation }) {
               </View>
             </View>
           ) : (
-            <View style={styles.emptyCarousel}>
-              <Text style={styles.emptyCarouselText}>
-                {t('noPhotoAddHint', 'No photo. Tap + to add one.')}
-              </Text>
-            </View>
+            <CompanyCategoryCover
+              companyName={company?.name}
+              description={company?.description}
+              visual={categoryVisual}
+              fallbackDescription={t('companyCategoryIntro', 'Discover what this business has to offer.')}
+            />
           )}
 
           {/* {!!selectedCategoryLabels.length && (
@@ -1150,56 +1200,74 @@ export default function CompanyDetailScreen({ route, navigation }) {
         </View>
 
         {/* TABS */}
-        <View style={styles.tabRow}>
-          {["services", "gallery"].map((tab) => (
+        <View style={[styles.tabRow, isRestaurantBusiness && styles.restaurantTabRow]}>
+          {(isRestaurantBusiness ? ['menu', 'services', 'gallery'] : ['services', 'gallery']).map((tab) => (
             <TouchableOpacity
               key={tab}
               style={[
                 styles.tab,
+                isRestaurantBusiness && styles.restaurantTab,
                 activeTab === tab &&
-                  (tab === "services"
-                    ? styles.tabActive
-                    : styles.tabActiveOutline),
+                  (isRestaurantBusiness
+                    ? styles.restaurantTabActive
+                    : tab === "services"
+                      ? styles.tabActive
+                      : styles.tabActiveOutline),
               ]}
               onPress={() => setActiveTab(tab)}
             >
               <Text
                 style={[
                   styles.tabText,
+                  isRestaurantBusiness && styles.restaurantTabText,
                   activeTab === tab &&
-                    (tab === "services"
-                      ? styles.tabTextActive
-                      : styles.tabTextOutline),
+                    (isRestaurantBusiness
+                      ? styles.restaurantTabTextActive
+                      : tab === "services"
+                        ? styles.tabTextActive
+                        : styles.tabTextOutline),
                 ]}
               >
-                {tab === "services"
-                  ? t('services', 'Services')
-                  : `${t('tabGallery', t('gallery', t('Gallery', 'Gallery')))} 🖼`}
+                {tab === 'menu'
+                  ? t('restaurantMenu', 'Menu')
+                  : tab === 'services'
+                    ? t('services', 'Services')
+                    : `${t('tabGallery', t('gallery', t('Gallery', 'Gallery')))} 🖼`}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
 
+        {activeTab === 'menu' && isRestaurantBusiness && (
+          <PublicRestaurantMenuExperience
+            companyId={companyId}
+            items={publicMenu}
+            paymentOptions={publicPaymentOptions}
+            isLoading={menuLoading}
+            error={menuError}
+          />
+        )}
+
         {/* SERVICES */}
         {activeTab === "services" && (
           <View>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>
+            <View style={[styles.sectionHeader, isRestaurantBusiness && styles.restaurantSectionHeader]}>
+              <Text style={[styles.sectionTitle, isRestaurantBusiness && styles.restaurantSectionTitle]}>
 
                 {/* nombre de services */}
                 {/* {services.length} {t('serviceCountLabel', `service${services.length !== 1 ? 's' : ''}`)} */}
               </Text>
             </View>
-            <View style={styles.grid}>
+            <View style={[styles.grid, isRestaurantBusiness && styles.restaurantGrid]}>
               {services.map((s, i) => (
-                <View key={s._id || i} style={styles.card}>
+                <View key={s._id || i} style={[styles.card, isRestaurantBusiness && styles.restaurantServiceCard]}>
                   {s.image ? (
                     <Image
                       source={{ uri: imgUrl(s.image) }}
                       style={styles.cardImg}
                     />
                   ) : (
-                    <View style={[styles.cardImg, styles.noImg]}>
+                    <View style={[styles.cardImg, styles.noImg, isRestaurantBusiness && styles.restaurantNoImage]}>
                       <Text style={styles.noImgIcon}>{s.video ? "🎬" : "🛠"}</Text>
                     </View>
                   )}
@@ -1233,9 +1301,9 @@ export default function CompanyDetailScreen({ route, navigation }) {
                 </View>
               ))}
               {services.length === 0 && (
-                <View style={styles.emptyState}>
+                <View style={[styles.emptyState, isRestaurantBusiness && styles.restaurantEmptyState]}>
                   <Text style={styles.emptyIcon}>🛠</Text>
-                  <Text style={styles.emptyText}>
+                  <Text style={[styles.emptyText, isRestaurantBusiness && styles.restaurantEmptyText]}>
                     {t('noServiceAddHint', 'No service available.')}
                   </Text>
                 </View>
@@ -1247,14 +1315,14 @@ export default function CompanyDetailScreen({ route, navigation }) {
         {/* GALLERY */}
         {activeTab === "gallery" && (
           <View>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>
+            <View style={[styles.sectionHeader, isRestaurantBusiness && styles.restaurantSectionHeader]}>
+              <Text style={[styles.sectionTitle, isRestaurantBusiness && styles.restaurantSectionTitle]}>
                 {galleryImages.length} {galleryImages.length === 1
                   ? t('photo', 'Photo')
                   : t('photos', 'Photos')}
               </Text>
             </View>
-            <View style={styles.galleryGrid}>
+            <View style={[styles.galleryGrid, isRestaurantBusiness && styles.restaurantGalleryGrid]}>
               {galleryImages.map((uri, i) => (
                 <View key={i} style={styles.galleryItemWrapper}>
                   <TouchableOpacity activeOpacity={0.92} onPress={() => openGalleryViewer(i)}>
@@ -1266,9 +1334,9 @@ export default function CompanyDetailScreen({ route, navigation }) {
                 </View>
               ))}
               {galleryImages.length === 0 && (
-                <View style={styles.emptyState}>
+                <View style={[styles.emptyState, isRestaurantBusiness && styles.restaurantEmptyState]}>
                   <Text style={styles.emptyIcon}>🖼</Text>
-                  <Text style={styles.emptyText}>
+                  <Text style={[styles.emptyText, isRestaurantBusiness && styles.restaurantEmptyText]}>
                     {t('noImageAddHint', 'No image. Tap + Add.')}
                   </Text>
                 </View>
@@ -1277,7 +1345,7 @@ export default function CompanyDetailScreen({ route, navigation }) {
           </View>
         )}
 
-        <View style={{ height: 40 }} />
+        <View style={{ height: isRestaurantBusiness ? 185 : 40 }} />
       </ScrollView>
 
       {/* EDIT INFO MODAL */}
@@ -1476,7 +1544,7 @@ export default function CompanyDetailScreen({ route, navigation }) {
 
                   <ScrollView showsVerticalScrollIndicator={false} style={styles.sectorList}>
                     <View style={styles.sectorGrid}>
-                      {CATEGORIES.map((cat) => {
+                      {businessTypes.map((cat) => {
                         const selected = selectedCategoryIds.includes(cat.id);
                         return (
                           <TouchableOpacity
@@ -1487,7 +1555,7 @@ export default function CompanyDetailScreen({ route, navigation }) {
                           >
                             <Text style={styles.sectorChipIcon}>{cat.icon}</Text>
                             <Text style={[styles.sectorChipText, selected && styles.sectorChipTextSelected]} numberOfLines={2}>
-                              {t(`category_${cat.id}`, cat.label)}
+                              {cat.label}
                             </Text>
                             {selected && <Text style={styles.sectorChipCheck}>✓</Text>}
                           </TouchableOpacity>
@@ -1723,6 +1791,10 @@ export default function CompanyDetailScreen({ route, navigation }) {
 // ─── styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#F6F6F9" },
+  scrollContent: { paddingBottom: 140 },
+  restaurantRoot: { backgroundColor: '#100D13' },
+  restaurantHeader: { backgroundColor: '#7026B9', borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
+  restaurantScrollContent: { paddingBottom: 210 },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
 
   uploadOverlay: {
@@ -1878,15 +1950,6 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: 0.5,
   },
-  emptyCarousel: {
-    width,
-    height: 160,
-    backgroundColor: PURPLE_LIGHT,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  emptyCarouselText: { color: "#888", fontSize: 14 },
-
   editImgBtn: {
     position: "absolute",
     top: 10,
@@ -1984,6 +2047,7 @@ const styles = StyleSheet.create({
     // marginBottom: 4,
     gap: 10,
   },
+  restaurantTabRow: { marginTop: 4, marginBottom: 10 },
   tab: {
     flex: 1,
     paddingVertical: 12,
@@ -1993,6 +2057,10 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: "transparent",
   },
+  restaurantTab: { backgroundColor: '#19151D', borderColor: '#302B35', borderRadius: 10 },
+  restaurantTabActive: { backgroundColor: '#EF476F', borderColor: '#EF476F' },
+  restaurantTabText: { color: '#A8A1AA' },
+  restaurantTabTextActive: { color: '#FFFFFF' },
   tabActive: { backgroundColor: PURPLE },
   tabActiveOutline: { borderColor: PURPLE, backgroundColor: "#fff" },
   tabText: { fontWeight: "700", fontSize: 14, color: "#888" },
@@ -2007,7 +2075,42 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     marginBottom: -30,
   },
+  restaurantSectionHeader: { marginBottom: 0 },
+  restaurantSectionTitle: { color: '#F6F2FA' },
   sectionTitle: { fontSize: 16, fontWeight: "700", color: "#333" },
+  restaurantGrid: { paddingBottom: 30 },
+  restaurantServiceCard: { backgroundColor: '#19151D', borderWidth: 1, borderColor: '#302B35' },
+  restaurantNoImage: { backgroundColor: '#242029' },
+  restaurantGalleryGrid: { paddingBottom: 32 },
+  restaurantEmptyState: { backgroundColor: '#19151D', borderRadius: 12, marginHorizontal: 12 },
+  restaurantEmptyText: { color: '#A8A1AA' },
+  menuSection: {
+    marginHorizontal: 16,
+    marginTop: 14,
+    marginBottom: 36,
+    paddingHorizontal: 16,
+    paddingTop: 18,
+    paddingBottom: 8,
+    borderRadius: 16,
+    backgroundColor: '#111016',
+    borderWidth: 1,
+    borderColor: '#2D2637',
+  },
+  menuIntro: { marginBottom: 14 },
+  menuEyebrow: { color: '#C4B5FD', fontSize: 10, fontWeight: '800', letterSpacing: 1.2 },
+  menuTitle: { color: '#F6F2FA', fontSize: 22, fontWeight: '800', marginTop: 6 },
+  menuLoading: { marginVertical: 26 },
+  menuEmpty: { color: '#A9A1B3', fontSize: 13, lineHeight: 19, paddingVertical: 18 },
+  menuGroup: { marginTop: 13 },
+  menuSectionTitle: { color: '#C4B5FD', fontSize: 14, fontWeight: '800', marginBottom: 4 },
+  menuItem: { minHeight: 66, flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#2D2637' },
+  menuItemImage: { width: 62, height: 62, borderRadius: 10, backgroundColor: '#211B2B' },
+  menuItemCopy: { flex: 1 },
+  menuItemName: { color: '#F6F2FA', fontSize: 14, lineHeight: 19, fontWeight: '700' },
+  menuItemDescription: { color: '#A9A1B3', fontSize: 11, lineHeight: 16, marginTop: 4 },
+  menuItemUnavailable: { color: '#F5BD62', fontSize: 10, fontWeight: '700', marginTop: 5 },
+  menuItemPrice: { color: '#D5C6FF', fontSize: 12, fontWeight: '800', paddingTop: 2 },
+  menuItemPriceUnavailable: { color: '#81798C' },
   addSvcBtn: {
     backgroundColor: PURPLE_LIGHT,
     paddingHorizontal: 14,

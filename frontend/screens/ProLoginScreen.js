@@ -1978,7 +1978,7 @@ export default function LoginScreen({ navigation }) {
             <View style={styles.legalBrandWrap}>
               <View style={styles.legalBrandBadge}>
                 <Image
-                  source={require('../assets/icon.png')}
+                  source={require('../assets/icon1.png')}
                   style={styles.legalBrandLogo}
                   resizeMode="cover"
                 />

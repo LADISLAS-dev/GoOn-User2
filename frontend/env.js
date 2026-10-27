@@ -49,7 +49,7 @@ export const API_URL = (() => {
 	}
 
 	console.log('🌐 API_URL fallback to production');
-	return 'https://goon-user2.onrender.com';
+	return 'https://goon-user.onrender.com';
 })();
 
 export const AGORA_APP_ID =

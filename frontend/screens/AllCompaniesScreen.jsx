@@ -1,3 +1,4 @@
+import { useBusinessTypes } from '../hooks/useBusinessTypes';
 import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
@@ -236,6 +237,8 @@ const EditCompanyModal = ({
   color,
 }) => {
   const { t } = useLanguage();
+    const { t, activeLanguage } = useLanguage();
+    const businessTypes = useBusinessTypes(CATEGORY_OPTIONS, activeLanguage);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [phone, setPhone] = useState("");
@@ -440,7 +443,7 @@ const EditCompanyModal = ({
 
               <Text style={styles.categorySectionTitle}>{t('categoryLabel', 'Secteurs')}</Text>
               <View style={styles.categoryGrid}>
-                {CATEGORY_OPTIONS.map((category) => {
+                {businessTypes.map((category) => {
                   const selected = selectedCategoryIds.includes(category.id);
                   return (
                     <TouchableOpacity
@@ -451,7 +454,7 @@ const EditCompanyModal = ({
                     >
                       <Text style={styles.categoryChipIcon}>{category.icon}</Text>
                       <Text style={[styles.categoryChipText, selected && styles.categoryChipTextSelected]} numberOfLines={2}>
-                        {t(`category_${category.id}`, category.label)}
+                        {category.label}
                       </Text>
                       {selected && <Text style={styles.categoryChipCheck}>✓</Text>}
                     </TouchableOpacity>

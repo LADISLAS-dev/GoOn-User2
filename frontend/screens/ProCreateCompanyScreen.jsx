@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { createCompany } from '../services/api';
+import { createCompany, getBusinessTypes } from '../services/api';
 import { useUser } from '../context/UserContext';
 import { useLanguage } from '../context/LanguageContext';
 import { useLazyImagePicker } from '../hooks/useLazyImagePicker';
@@ -25,6 +25,7 @@ import { API_URL } from '../env';
 import { auth } from '../services/firebase';
 import { isLocalAssetUri } from '../utils/profileUtils';
 import { getCategoryLabel } from '../utils/categoryLabels';
+import { getBusinessModuleLabel, getBusinessModulePreviewKeys } from '../utils/businessTypes';
 
 const C = {
   purple:       '#8B2FC9',
@@ -159,6 +160,7 @@ export default function CreateCompanyScreen() {
   }, [t]);
   const ui = CREATE_COMPANY_UI[language] || CREATE_COMPANY_UI.en;
   const imagePicker = useLazyImagePicker();
+  const [businessTypes, setBusinessTypes] = useState(CATEGORIES);
 
   const { defaultCategoryId = '1', defaultCategoryName = '' } = route.params || {};
 
@@ -170,6 +172,7 @@ export default function CreateCompanyScreen() {
   const [website, setWebsite] = useState('');
   const [location, setLocation] = useState('');
   const [backgroundImage, setBackgroundImage] = useState(null);
+  const [categorySearch, setCategorySearch] = useState('');
   const [latitude, setLatitude] = useState('');
   const [longitude, setLongitude] = useState('');
   const [selectedCategoryIds, setSelectedCategoryIds] = useState(() => defaultCategoryId ? [defaultCategoryId] : ['1']);
@@ -181,9 +184,34 @@ export default function CreateCompanyScreen() {
   const [locationAccuracy, setLocationAccuracy] = useState(null);
   const [locationUpdatedAt, setLocationUpdatedAt] = useState(null);
 
+  useEffect(() => {
+    let isCurrent = true;
+    getBusinessTypes()
+      .then((types) => {
+        if (!isCurrent || !types.length) return;
+        setBusinessTypes(types.map((type) => {
+          const localLabel = getCategoryLabel(type.key, activeLanguage);
+          return {
+            id: type.key,
+            icon: type.icon,
+            moduleKeys: type.moduleKeys || [],
+            label: type.labels?.[activeLanguage] || (localLabel !== type.key ? localLabel : type.labels?.en),
+          };
+        }));
+      })
+      .catch((error) => console.warn('Unable to load business types:', error?.message || error));
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [activeLanguage]);
+
   const localizedCategories = useMemo(
-    () => CATEGORIES.map((category) => ({ ...category, label: getCategoryLabel(category.id, activeLanguage) })),
-    [language]
+    () => businessTypes.map((category) => ({
+      ...category,
+      label: category.label || getCategoryLabel(category.id, activeLanguage),
+    })),
+    [businessTypes, activeLanguage]
   );
   const selectedCategory = localizedCategories.find(c => c.id === selectedCategoryIds[0]) || localizedCategories[0];
   const orderedCategories = [...localizedCategories].sort((a, b) => {
@@ -193,6 +221,10 @@ export default function CreateCompanyScreen() {
     if (bSelected && !aSelected) return 1;
     return a.label.localeCompare(b.label);
   });
+  const filteredCategories = orderedCategories.filter((category) => (
+    category.label.toLowerCase().includes(categorySearch.trim().toLowerCase())
+  ));
+  const previewModuleKeys = getBusinessModulePreviewKeys(localizedCategories, selectedCategoryIds);
   const isValid = name.trim().length >= 2 && selectedCategoryIds.length > 0;
   const { user } = useUser();
 
@@ -399,6 +431,7 @@ export default function CreateCompanyScreen() {
       formData.append('location', locationValue);
       const primaryCategoryId = selectedCategoryIds[0] || defaultCategoryId || '1';
       formData.append('categoryId', primaryCategoryId);
+      formData.append('businessTypeId', primaryCategoryId);
       formData.append('categoryIds', JSON.stringify(selectedCategoryIds));
       formData.append('isVerified', String(isVerified));
       // Compatibility fallback for backends expecting owner id in payload.
@@ -440,7 +473,7 @@ export default function CreateCompanyScreen() {
                     params: {
                       screen: 'CompanyHome',
                       params: {
-                        screen: 'CompanyOverview',
+                        screen: selectedCategoryIds.includes('2') ? 'RestaurantDashboard' : 'CompanyOverview',
                         params: {
                           companyId: newCompanyId,
                           currentUserId: user?._id || null,
@@ -550,9 +583,22 @@ export default function CreateCompanyScreen() {
 
           {/* Catégorie */}
           <SectionLabel text={ui.sectionCategories} />
-          <Text style={styles.categoryHelperText}>{ui.categoryHint}</Text>
+          <Text style={styles.categoryHelperText}>
+            {tr('primaryBusinessTypeHint', 'Le premier secteur sélectionné définit le domaine principal. Vous pouvez ajouter des secteurs complémentaires.')}
+          </Text>
+          <Text style={styles.primaryTypeText}>
+            {tr('primaryBusinessType', 'Domaine principal')}: {selectedCategory?.label || tr('chooseBusinessType', 'Sélectionnez un domaine')}
+          </Text>
+          <TextInput
+            value={categorySearch}
+            onChangeText={setCategorySearch}
+            placeholder={tr('searchBusinessTypes', 'Rechercher un domaine')}
+            placeholderTextColor={C.textSecondary}
+            style={styles.categorySearch}
+            accessibilityLabel={tr('searchBusinessTypes', 'Rechercher un domaine')}
+          />
           <View style={styles.categoryGrid}>
-            {orderedCategories.map(cat => (
+            {filteredCategories.map(cat => (
               <TouchableOpacity
                 key={cat.id}
                 style={[styles.catChip, selectedCategoryIds.includes(cat.id) && styles.catChipSelected]}
@@ -570,6 +616,18 @@ export default function CreateCompanyScreen() {
               </TouchableOpacity>
             ))}
           </View>
+          {!!previewModuleKeys.length && (
+            <View style={styles.modulePreview}>
+              <Text style={styles.modulePreviewTitle}>{tr('modulesEnabledForBusiness', 'Modules prévus pour ce domaine')}</Text>
+              <View style={styles.modulePreviewList}>
+                {previewModuleKeys.map((moduleKey) => (
+                  <View key={moduleKey} style={styles.modulePreviewChip}>
+                    <Text style={styles.modulePreviewText}>{getBusinessModuleLabel(moduleKey, activeLanguage)}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
 
           {/* Contact */}
           <SectionLabel text={ui.sectionContact} />
@@ -760,7 +818,14 @@ const styles = StyleSheet.create({
   charCount: { fontSize: 11, color: C.textTertiary, textAlign: 'right', marginTop: 4 },
 
   categoryHelperText: { fontSize: 12, color: C.textSecondary, marginHorizontal: 20, marginBottom: 12 },
+  primaryTypeText: { color: C.textPrimary, fontSize: 13, fontWeight: '700', marginHorizontal: 20, marginBottom: 8 },
+  categorySearch: { minHeight: 42, marginHorizontal: 16, marginBottom: 10, paddingHorizontal: 12, borderWidth: 1, borderColor: C.separator, borderRadius: 10, backgroundColor: C.card, color: C.textPrimary },
   categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', paddingHorizontal: 16, rowGap: 10 },
+  modulePreview: { marginHorizontal: 16, marginTop: 13, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: C.separator, backgroundColor: C.card },
+  modulePreviewTitle: { color: C.textPrimary, fontSize: 12, fontWeight: '800', marginBottom: 8 },
+  modulePreviewList: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  modulePreviewChip: { paddingHorizontal: 8, paddingVertical: 5, borderRadius: 7, backgroundColor: C.purpleLight },
+  modulePreviewText: { color: C.purpleDark, fontSize: 10, fontWeight: '700' },
   catChip: {
     width: '48.5%',
     minHeight: 118,

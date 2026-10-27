@@ -17,7 +17,7 @@
         "projectId": "4f3a800d-9c2e-482a-a42c-dbdee1cec06e"
       }
     },
-    "icon": "./assets/icon3.png",
+    "icon": "./assets/icon1.png",
     "assetBundlePatterns": [
       "**/*"
     ],

@@ -1,10 +1,12 @@
 // navigation/AppNavigator.js
-import React from "react";
+import React, { useCallback } from "react";
 import { useEffect, useState } from "react";
-import { NavigationContainer, getFocusedRouteNameFromRoute } from "@react-navigation/native";
+import { NavigationContainer, getFocusedRouteNameFromRoute, useFocusEffect } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { ActivityIndicator, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getCompanyById, getCompanyModules } from '../services/api';
 
 import { useUser }       from "../context/UserContext";
 import { navigationRef, flushPendingNavigationActions } from "./navigationRef";
@@ -27,6 +29,7 @@ import MyCompanyScreen          from "../screens/MyCompanyScreen";
 import ProMyCompanyScreen       from "../screens/ProMyCompanyScreen";
 import CompanyDetailScreen      from "../screens/CompanyDetailScreen";
 import ProCompanyDetailScreen   from "../screens/ProCompanyDetailScreen";
+import ProRestaurantDashboardScreen from "../screens/ProRestaurantDashboardScreen";
 import ServiceDetailScreen      from "../screens/ServiceDetailScreen";
 import ProServiceDetailScreen   from "../screens/ProServiceDetailScreen";
 import CreateAppointmentScreen  from "../screens/CreateAppointmentScreen";
@@ -48,6 +51,16 @@ import NotificationLabsScreen from "../screens/NotificationLabsScreen";
 import ProNotificationLabsScreen from "../screens/ProNotificationLabsScreen";
 import AnalyticsDashboardScreen from "../screens/AnalyticsDashboardScreen";
 import ProAnalyticsDashboardScreen from "../screens/ProAnalyticsDashboardScreen";
+import ProBusinessModulesScreen from "../screens/ProBusinessModulesScreen";
+import ProCustomersScreen from "../screens/ProCustomersScreen";
+import ProTeamScreen from "../screens/ProTeamScreen";
+import ProAuditLogsScreen from "../screens/ProAuditLogsScreen";
+import ProAdminCatalogScreen from "../screens/ProAdminCatalogScreen";
+import ProAcceptTeamInvitationScreen from "../screens/ProAcceptTeamInvitationScreen";
+import ProInventoryScreen from "../screens/ProInventoryScreen";
+import ProProcurementScreen from "../screens/ProProcurementScreen";
+import ProInvoicesScreen from "../screens/ProInvoicesScreen";
+import ProSalesOrdersScreen from "../screens/ProSalesOrdersScreen";
 import VideoCallScreen from "../screens/VideoCallScreen";
 import ProVideoCallScreen from "../screens/ProVideoCallScreen";
 
@@ -170,16 +183,37 @@ function MainTabs({ route }) {
   );
 }
 
-function ProCompanyTabStack({ route }) {
+function ProCompanyTabStack({ route, moduleConfigs, isRestaurantCompany }) {
   const { companyId, currentUserId, onboardingFlow, justCreatedCompany } = route.params || {};
+  if (isRestaurantCompany === null) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0D0B12' }}>
+        <ActivityIndicator color="#C4B5FD" />
+      </View>
+    );
+  }
 
   return (
-    <CompanyStack.Navigator screenOptions={{ headerShown: false }}>
+    <CompanyStack.Navigator
+      key={isRestaurantCompany ? 'restaurant-company-stack' : 'standard-company-stack'}
+      initialRouteName={isRestaurantCompany ? 'RestaurantDashboard' : 'CompanyOverview'}
+      screenOptions={{ headerShown: false }}
+    >
       <CompanyStack.Screen
         name="CompanyOverview"
         component={ProCompanyDetailScreen}
         initialParams={{ companyId, currentUserId, onboardingFlow, justCreatedCompany }}
       />
+      <CompanyStack.Screen name="RestaurantDashboard">
+        {(props) => (
+          <ProRestaurantDashboardScreen
+            {...props}
+            companyId={companyId}
+            onboardingFlow={onboardingFlow}
+            moduleConfigs={moduleConfigs}
+          />
+        )}
+      </CompanyStack.Screen>
       <CompanyStack.Screen name="ServiceDetail" component={ProServiceDetailScreen} />
       <CompanyStack.Screen name="CreateAppointment" component={ProCreateAppointmentScreen} />
       <CompanyStack.Screen name="AppointmentDetails" component={ProAppointmentDetailsScreen} />
@@ -194,6 +228,51 @@ function ProMainTabs({ route }) {
     route?.params;
 
   const { companyId, currentUserId, onboardingFlow, justCreatedCompany } = navParams || {};
+  const [moduleConfigs, setModuleConfigs] = useState(null);
+  const [isRestaurantCompany, setIsRestaurantCompany] = useState(null);
+
+  useFocusEffect(useCallback(() => {
+    let isCurrent = true;
+    setModuleConfigs(companyId ? [] : null);
+    setIsRestaurantCompany(companyId ? null : false);
+
+    if (!companyId) {
+      return () => {
+        isCurrent = false;
+      };
+    }
+
+    getCompanyModules(companyId)
+      .then((modules) => {
+        if (isCurrent) setModuleConfigs(modules);
+      })
+      .catch((error) => {
+        console.warn('Unable to load company modules:', error?.message || error);
+        if (isCurrent) setModuleConfigs([]);
+      });
+
+    getCompanyById(companyId)
+      .then((company) => {
+        const categoryIds = [
+          ...(Array.isArray(company?.categoryIds) ? company.categoryIds : []),
+          company?.categoryId,
+          company?.businessTypeId,
+        ].map((id) => String(id || '').trim());
+        if (isCurrent) setIsRestaurantCompany(categoryIds.includes('2'));
+      })
+      .catch(() => {
+        if (isCurrent) setIsRestaurantCompany(false);
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [companyId]));
+
+  const hasModule = (key) =>
+    !Array.isArray(moduleConfigs) || moduleConfigs.some(
+      (module) => module.key === key && module.enabled !== false
+    );
 
   return (
     <Tab.Navigator
@@ -202,6 +281,8 @@ function ProMainTabs({ route }) {
           {...props}
           defaultCompanyId={companyId}
           defaultCurrentUserId={currentUserId}
+          moduleConfigs={moduleConfigs}
+          isRestaurantCompany={isRestaurantCompany}
         />
       )}
       screenOptions={{ headerShown: false }}
@@ -220,6 +301,8 @@ function ProMainTabs({ route }) {
         {(props) => (
           <ProCompanyTabStack
             {...props}
+            moduleConfigs={moduleConfigs}
+            isRestaurantCompany={isRestaurantCompany}
             route={{
               ...props.route,
               params: {
@@ -234,30 +317,124 @@ function ProMainTabs({ route }) {
         )}
       </Tab.Screen>
 
-      <Tab.Screen name="Booking">
-        {(props) => (
-          <ProBookingScreen
-            {...props}
-            companyId={companyId}
-            currentUserId={currentUserId}
-          />
-        )}
-      </Tab.Screen>
+      {hasModule('appointments') && (
+        <Tab.Screen name="Booking">
+          {(props) => (
+            <ProBookingScreen
+              {...props}
+              companyId={companyId}
+              currentUserId={currentUserId}
+            />
+          )}
+        </Tab.Screen>
+      )}
 
-      <Tab.Screen
-        name="Messages"
-        options={({ route }) => ({
-          tabBarStyle: route?.params?.hideTabBar ? { display: "none" } : undefined,
-        })}
-      >
-        {(props) => (
-          <ProMessagesScreen
-            {...props}
-            companyId={companyId}
-            currentUserId={currentUserId}
-          />
-        )}
-      </Tab.Screen>
+      {hasModule('messages') && (
+        <Tab.Screen
+          name="Messages"
+          options={({ route }) => ({
+            tabBarStyle: route?.params?.hideTabBar ? { display: "none" } : undefined,
+          })}
+        >
+          {(props) => (
+            <ProMessagesScreen
+              {...props}
+              companyId={companyId}
+              currentUserId={currentUserId}
+            />
+          )}
+        </Tab.Screen>
+      )}
+
+      {hasModule('analytics') && (
+        <Tab.Screen name="Analytics">
+          {(props) => (
+            <ProAnalyticsDashboardScreen
+              {...props}
+              companyId={companyId}
+            />
+          )}
+        </Tab.Screen>
+      )}
+
+      {hasModule('customers') && (
+        <Tab.Screen name="Customers">
+          {(props) => (
+            <ProCustomersScreen
+              {...props}
+              companyId={companyId}
+            />
+          )}
+        </Tab.Screen>
+      )}
+
+      {hasModule('team') && (
+        <Tab.Screen name="Team">
+          {(props) => (
+            <ProTeamScreen
+              {...props}
+              companyId={companyId}
+            />
+          )}
+        </Tab.Screen>
+      )}
+
+      {hasModule('audit_logs') && (
+        <Tab.Screen name="AuditLogs">
+          {(props) => (
+            <ProAuditLogsScreen
+              {...props}
+              companyId={companyId}
+            />
+          )}
+        </Tab.Screen>
+      )}
+
+      {hasModule('inventory') && (
+        <Tab.Screen name="Inventory">
+          {(props) => (
+            <ProInventoryScreen
+              {...props}
+              companyId={companyId}
+              restaurantMode={isRestaurantCompany}
+            />
+          )}
+        </Tab.Screen>
+      )}
+
+      {hasModule('procurement') && (
+        <Tab.Screen name="Procurement">
+          {(props) => (
+            <ProProcurementScreen
+              {...props}
+              companyId={companyId}
+            />
+          )}
+        </Tab.Screen>
+      )}
+
+      {hasModule('invoices') && (
+        <Tab.Screen name="Invoices">
+          {(props) => (
+            <ProInvoicesScreen
+              {...props}
+              companyId={companyId}
+            />
+          )}
+        </Tab.Screen>
+      )}
+
+      {hasModule('sales_orders') && (
+        <Tab.Screen name="SalesOrders">
+          {(props) => (
+            <ProSalesOrdersScreen
+              {...props}
+              companyId={companyId}
+              invoicesEnabled={hasModule('invoices')}
+            />
+          )}
+        </Tab.Screen>
+      )}
 
       <Tab.Screen name="About">
         {(props) => (
@@ -386,6 +563,9 @@ export default function AppNavigator() {
         <RootStack.Screen name="Settings"           component={SettingsComponent}          />
         <RootStack.Screen name="NotificationLabs"   component={NotificationLabsComponent}  />
         <RootStack.Screen name="AnalyticsDashboard" component={AnalyticsDashboardComponent} />
+        <RootStack.Screen name="BusinessModules" component={ProBusinessModulesScreen} />
+        <RootStack.Screen name="SuperAdminCatalog" component={ProAdminCatalogScreen} />
+        <RootStack.Screen name="AcceptTeamInvitation" component={ProAcceptTeamInvitationScreen} />
         <RootStack.Screen name="VideoCall"          component={VideoCallComponent}         />
 
         {/* Tab bar */}

@@ -1,5 +1,6 @@
 import axios from 'axios';
 import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 import { auth } from './firebase';
 import { API_URL } from '../env';
 import { isCompanyPubliclyVisible } from '../utils/companyVisibility';
@@ -17,7 +18,7 @@ const resolveExpoHost = () => {
 
 // 🔥 BASE URL UNIQUE
 const API = (() => {
-  const url = (API_URL || 'https://goon-user2.onrender.com').replace(/\/$/, '');
+  const url = (API_URL || 'https://goon-user.onrender.com').replace(/\/$/, '');
   console.log('✅ API endpoint:', url);
   return url;
 })();
@@ -323,6 +324,318 @@ export const getCompanyById = async (id) => {
     throw error;
   }
   const res = await api.get(`/companies/${id}`);
+  return res.data;
+};
+
+export const getBusinessTypes = async () => {
+  const res = await api.get('/business-types');
+  return Array.isArray(res.data?.data) ? res.data.data : [];
+};
+export const getSuperAdminAccess = async () => {
+  const res = await api.get('/admin/access');
+  return Boolean(res.data?.isSuperAdmin);
+};
+export const getAdminCatalog = async () => {
+  const res = await api.get('/admin/catalog');
+  return res.data?.data || { businessTypes: [], businessModules: [] };
+};
+
+export const getAdminOverview = async () => {
+  const res = await api.get('/admin/overview');
+  return res.data?.data || { totals: {}, companiesByType: [] };
+};
+
+export const getAdminBusinesses = async (params = {}) => {
+  const res = await api.get('/admin/businesses', { params });
+  return res.data;
+};
+export const createAdminBusinessType = async (payload) => {
+  const res = await api.post('/admin/business-types', payload);
+  return res.data?.data;
+};
+export const updateAdminBusinessType = async (key, payload) => {
+  const res = await api.patch(`/admin/business-types/${encodeURIComponent(key)}`, payload);
+  return res.data?.data;
+};
+export const updateAdminBusinessModule = async (key, active) => {
+  const res = await api.patch(`/admin/business-modules/${encodeURIComponent(key)}`, { active });
+  return res.data?.data;
+};
+export const getAdminAuditLogs = async (params = {}) => {
+  const res = await api.get('/admin/audit-logs', { params });
+  return res.data;
+};
+export const getAdminRestaurantPayments = async (params = {}) => {
+  const res = await api.get('/admin/restaurant-payments', { params });
+  return res.data;
+};
+
+export const getProducts = async (companyId, params = {}) => {
+  const res = await api.get(`/products/company/${companyId}`, { params });
+  return res.data;
+};
+
+export const getPublicRestaurantMenu = async (companyId, params = {}) => {
+  const res = await api.get(`/products/public/company/${companyId}`, { params });
+  return res.data;
+};
+
+export const createPublicRestaurantOrder = async (companyId, payload) => {
+  const res = await api.post(`/sales-orders/public/company/${companyId}/checkout`, payload);
+  return res.data?.data;
+};
+
+export const getRestaurantPaymentAccounts = async (companyId) => {
+  const res = await api.get(`/payment-accounts/company/${companyId}`);
+  return res.data?.data;
+};
+
+export const createStripeConnectLink = async (companyId) => {
+  const res = await api.post(`/payment-accounts/company/${companyId}/stripe/connect`);
+  return res.data?.data;
+};
+
+export const createPayPalConnectLink = async (companyId, payload) => {
+  const res = await api.post(`/payment-accounts/company/${companyId}/paypal/connect`, payload);
+  return res.data?.data;
+};
+
+export const uploadProductImage = async (companyId, asset) => {
+  const uri = typeof asset === 'string' ? asset : asset?.uri;
+  if (!companyId || !uri) throw new Error('Une image produit est requise.');
+
+  const pathname = uri.split('?')[0];
+  const filename = pathname.split('/').pop() || 'menu-item.jpg';
+  const extension = filename.split('.').pop()?.toLowerCase();
+  const type = asset?.mimeType || (extension === 'png' ? 'image/png' : extension === 'webp' ? 'image/webp' : 'image/jpeg');
+  const formData = new FormData();
+
+  if (Platform.OS === 'web') {
+    const blob = asset?.file || await (await fetch(uri)).blob();
+    formData.append('image', blob, filename);
+  } else {
+    formData.append('image', { uri, name: filename, type });
+  }
+
+  const res = await api.post(`/products/company/${companyId}/upload-image`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return res.data?.url || '';
+};
+
+export const createProduct = async (companyId, payload) => {
+  const res = await api.post(`/products/company/${companyId}`, payload);
+  return res.data?.data;
+};
+
+export const updateProduct = async (productId, payload) => {
+  const res = await api.patch(`/products/${productId}`, payload);
+  return res.data?.data;
+};
+
+export const archiveProduct = async (productId) => {
+  const res = await api.delete(`/products/${productId}`);
+  return res.data?.data;
+};
+
+export const createInventoryMovement = async (productId, payload) => {
+  const res = await api.post(`/products/${productId}/movements`, payload);
+  return res.data?.data;
+};
+
+export const getInventoryMovements = async (productId, params = {}) => {
+  const res = await api.get(`/products/${productId}/movements`, { params });
+  return res.data;
+};
+
+export const getSuppliers = async (companyId, params = {}) => {
+  const res = await api.get(`/procurement/suppliers/company/${companyId}`, { params });
+  return res.data;
+};
+
+export const createSupplier = async (companyId, payload) => {
+  const res = await api.post(`/procurement/suppliers/company/${companyId}`, payload);
+  return res.data?.data;
+};
+
+export const updateSupplier = async (supplierId, payload) => {
+  const res = await api.patch(`/procurement/suppliers/${supplierId}`, payload);
+  return res.data?.data;
+};
+
+export const getPurchaseOrders = async (companyId, params = {}) => {
+  const res = await api.get(`/procurement/purchase-orders/company/${companyId}`, { params });
+  return res.data;
+};
+
+export const createPurchaseOrder = async (companyId, payload) => {
+  const res = await api.post(`/procurement/purchase-orders/company/${companyId}`, payload);
+  return res.data?.data;
+};
+
+export const receivePurchaseOrder = async (orderId, payload) => {
+  const res = await api.post(`/procurement/purchase-orders/${orderId}/receive`, payload);
+  return res.data?.data;
+};
+
+export const getInvoices = async (companyId, params = {}) => {
+  const res = await api.get(`/invoices/company/${companyId}`, { params });
+  return res.data;
+};
+
+export const getInvoiceSummary = async (companyId) => {
+  const res = await api.get(`/invoices/company/${companyId}/summary`);
+  return res.data?.data || {};
+};
+
+export const createInvoice = async (companyId, payload) => {
+  const res = await api.post(`/invoices/company/${companyId}`, payload);
+  return res.data?.data;
+};
+
+export const updateInvoice = async (invoiceId, payload) => {
+  const res = await api.patch(`/invoices/${invoiceId}`, payload);
+  return res.data?.data;
+};
+
+export const issueInvoice = async (invoiceId) => {
+  const res = await api.post(`/invoices/${invoiceId}/issue`);
+  return res.data?.data;
+};
+
+export const recordInvoicePayment = async (invoiceId, payload) => {
+  const res = await api.post(`/invoices/${invoiceId}/payments`, payload);
+  return res.data?.data;
+};
+
+export const getInvoicePayments = async (invoiceId) => {
+  const res = await api.get(`/invoices/${invoiceId}/payments`);
+  return res.data?.data || [];
+};
+
+export const getSalesOrders = async (companyId, params = {}) => {
+  const res = await api.get(`/sales-orders/company/${companyId}`, { params });
+  return res.data;
+};
+
+export const createSalesOrder = async (companyId, payload) => {
+  const res = await api.post(`/sales-orders/company/${companyId}`, payload);
+  return res.data?.data;
+};
+
+export const transitionSalesOrder = async (orderId, action) => {
+  const res = await api.post(`/sales-orders/${orderId}/${action}`);
+  return res.data?.data;
+};
+
+export const recordSalesOrderPayment = async (orderId, payload) => {
+  const res = await api.post(`/sales-orders/${orderId}/payments`, payload);
+  return res.data?.data;
+};
+
+export const createInvoiceFromSalesOrder = async (orderId) => {
+  const res = await api.post(`/sales-orders/${orderId}/invoice`);
+  return res.data;
+};
+
+export const getMyCompany = async () => {
+  const res = await api.get('/companies/me');
+  return res.data;
+};
+
+export const getCompanyModules = async (id) => {
+  if (!isValidCompanyId(id)) {
+    const error = new Error('Invalid companyId: request skipped');
+    error.code = 'INVALID_COMPANY_ID';
+    throw error;
+  }
+
+  const res = await api.get(`/companies/${id}/modules`);
+  return Array.isArray(res.data?.data) ? res.data.data : [];
+};
+
+export const getCompanyModuleSettings = async (id) => {
+  if (!isValidCompanyId(id)) {
+    const error = new Error('Invalid companyId: request skipped');
+    error.code = 'INVALID_COMPANY_ID';
+    throw error;
+  }
+
+  const res = await api.get(`/companies/${id}/modules`);
+  return {
+    modules: Array.isArray(res.data?.data) ? res.data.data : [],
+    canManage: Boolean(res.data?.canManage),
+  };
+};
+
+export const updateCompanyModules = async (id, modules) => {
+  if (!isValidCompanyId(id)) {
+    const error = new Error('Invalid companyId: request skipped');
+    error.code = 'INVALID_COMPANY_ID';
+    throw error;
+  }
+
+  const res = await api.patch(`/companies/${id}/modules`, { modules });
+  return Array.isArray(res.data?.data) ? res.data.data : [];
+};
+
+export const getCustomers = async (companyId, params = {}) => {
+  const res = await api.get(`/customers/company/${companyId}`, { params });
+  return res.data;
+};
+
+export const createCustomer = async (companyId, customer) => {
+  const res = await api.post(`/customers/company/${companyId}`, customer);
+  return res.data?.data;
+};
+
+export const updateCustomer = async (customerId, customer) => {
+  const res = await api.patch(`/customers/${customerId}`, customer);
+  return res.data?.data;
+};
+
+export const deleteCustomer = async (customerId) => {
+  const res = await api.delete(`/customers/${customerId}`);
+  return res.data;
+};
+
+export const getCompanyTeam = async (companyId) => {
+  const res = await api.get(`/employees/company/${companyId}`);
+  return res.data?.data || { roles: [], employees: [], permissions: [], canManage: false };
+};
+
+export const addCompanyEmployee = async (companyId, payload) => {
+  const res = await api.post(`/employees/company/${companyId}`, payload);
+  return res.data?.data;
+};
+
+export const acceptCompanyInvitation = async (token) => {
+  const res = await api.post('/employees/invitations/accept', { token });
+  return res.data?.data;
+};
+
+export const revokeCompanyInvitation = async (invitationId) => {
+  const res = await api.patch(`/employees/invitations/${invitationId}/revoke`);
+  return res.data;
+};
+
+export const updateCompanyEmployee = async (employeeId, payload) => {
+  const res = await api.patch(`/employees/${employeeId}`, payload);
+  return res.data?.data;
+};
+
+export const createCompanyRole = async (companyId, payload) => {
+  const res = await api.post(`/employees/company/${companyId}/roles`, payload);
+  return res.data?.data;
+};
+
+export const updateCompanyRole = async (companyId, roleId, payload) => {
+  const res = await api.patch(`/employees/company/${companyId}/roles/${roleId}`, payload);
+  return res.data?.data;
+};
+
+export const getCompanyAuditLogs = async (companyId, params = {}) => {
+  const res = await api.get(`/audit-logs/company/${companyId}`, { params });
   return res.data;
 };
 

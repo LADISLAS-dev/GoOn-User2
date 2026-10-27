@@ -1,6 +1,6 @@
 // components/CustomTabBar.js
 import React, { useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Platform } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, Platform, ScrollView } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNotifications } from "../../context/NotificationContext";
 import { useLanguage } from "../../context/LanguageContext";
@@ -14,6 +14,14 @@ const TAB_CONFIG = {
   CompanyHome: { icon: "🏢", label: "My company" },
   Booking:  { icon: "📅", label: "Booking"  },
   Messages: { icon: "💬", label: "Messages" },
+  Analytics: { icon: "📊", label: "Analytics" },
+  Customers: { icon: "👥", label: "Customers" },
+  Team: { icon: "👤", label: "Team" },
+  AuditLogs: { icon: "📜", label: "Activity" },
+  Inventory: { icon: "📦", label: "Stock" },
+  Procurement: { icon: "🧾", label: "Purchasing" },
+  Invoices: { icon: "📄", label: "Invoices" },
+  SalesOrders: { icon: "🛍️", label: "Sales" },
   About:    { icon: "👤", label: "About"    },
 };
 
@@ -23,10 +31,12 @@ export default function CustomTabBar({
   descriptors,
   defaultCompanyId,
   defaultCurrentUserId,
+  moduleConfigs,
+  isRestaurantCompany = false,
 }) {
   const insets = useSafeAreaInsets();
   const { notifications = [] } = useNotifications();
-  const { t } = useLanguage();
+  const { t, activeLanguage } = useLanguage();
   const { isGuest } = useUser();
   const [showAuthPrompt, setShowAuthPrompt] = useState(false);
 
@@ -64,13 +74,22 @@ export default function CustomTabBar({
     <>
     <View style={[styles.wrapper, { paddingBottom: Math.max(insets.bottom, 8) }]}>
       <View style={styles.bar}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.tabsContent}
+        >
         {state.routes.map((route, index) => {
           const isFocused = state.index === index;
           const baseCfg = TAB_CONFIG[route.name] || { icon: "●", label: route.name };
+          const moduleConfig = moduleConfigs?.find(
+            (module) => module.screen === route.name && module.enabled !== false
+          );
           const cfg = {
             ...baseCfg,
-            label:
-              route.name === "Home"
+            icon: moduleConfig?.icon || baseCfg.icon,
+            label: moduleConfig?.labels?.[activeLanguage] ||
+              (route.name === "Home"
                 ? t('tabHome')
                 : route.name === "CompanyHome"
                   ? t('drawerMyCompany')
@@ -80,7 +99,7 @@ export default function CustomTabBar({
                     ? t('tabMessages')
                     : route.name === "About"
                       ? t('tabAbout')
-                      : baseCfg.label,
+                      : baseCfg.label),
           };
 
           const onPress = () => {
@@ -112,7 +131,7 @@ export default function CustomTabBar({
 
               if (companyId) {
                 navigation.navigate("CompanyHome", {
-                  screen: "CompanyOverview",
+                  screen: isRestaurantCompany ? "RestaurantDashboard" : "CompanyOverview",
                   params: {
                     companyId,
                     ...(currentUserId ? { currentUserId } : {}),
@@ -171,6 +190,7 @@ export default function CustomTabBar({
             </TouchableOpacity>
           );
         })}
+        </ScrollView>
       </View>
     </View>
     <AuthPromptModal
@@ -195,9 +215,6 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
   },
   bar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
     backgroundColor: "rgba(20, 18, 30, 0.92)",
     borderRadius: 60,
     paddingVertical: 10,
@@ -214,7 +231,13 @@ const styles = StyleSheet.create({
       android: { elevation: 14 },
     }),
   },
+  tabsContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   activePill: {
+    flexShrink: 0,
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: PURPLE,
@@ -225,7 +248,7 @@ const styles = StyleSheet.create({
   },
   activeIcon:  { fontSize: 16 },
   activeLabel: { color: "#fff", fontSize: 14, fontWeight: "600" },
-  iconBtn:     { padding: 6, alignItems: "center", justifyContent: "center" },
+  iconBtn:     { flexShrink: 0, padding: 6, alignItems: "center", justifyContent: "center" },
   badge: {
     position: "absolute",
     top: -4,

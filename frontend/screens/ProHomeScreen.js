@@ -36,12 +36,15 @@ import {
   deleteBanner,
   deleteNotificationApi,
   getAllCompanies,
+  getSuperAdminAccess,
   getBanners,
+  getMyCompany,
   uploadBannerMedia,
   updateBanner,
 } from '../services/api';
 import { resolveAvatarUri } from '../utils/profileUtils';
 import { getCategoryLabel } from '../utils/categoryLabels';
+import { useBusinessTypes } from '../hooks/useBusinessTypes';
 import { localizeNotificationContent, localizeNotificationTag } from '../utils/notificationI18n';
 import { useSmartRefresh } from '../hooks/useSmartRefresh';
 import AuthPromptModal from '../components/AuthPromptModal';
@@ -190,7 +193,7 @@ const getLocalizedValue = (valuesByLanguage, language) => {
 const FEATURED_COLORS = ['#E8402A', C.purple, '#2ECC71', C.blue, '#F39C12', '#14B8A6', '#E11D48'];
 const FEATURED_COMPANIES_CACHE_KEY = '@goon:featured-companies-cache';
 const APP_MODE_STORAGE_KEY = '@goon:app-mode';
-const MODE_SWITCH_GIF_DURATION_MS = 1400;
+const MODE_SWITCH_GIF_DURATION_MS = 4400;
 const INLINE_BANNER_VIDEO_ENABLED = true;
 
 
@@ -739,6 +742,7 @@ export default function HomeScreen() {
   const [notifOnlyUnread, setNotifOnlyUnread] = useState(true);
   const [notifPreview, setNotifPreview] = useState(true);
   const [featuredCompanies, setFeaturedCompanies] = useState([]);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [bannerAds, setBannerAds] = useState([]);
   const [bannerDetails, setBannerDetails] = useState(null);
   const [bannerMediaViewer, setBannerMediaViewer] = useState(null);
@@ -771,6 +775,28 @@ export default function HomeScreen() {
   const lastFeaturedLoadAtRef = useRef(0);
   const lastBannersLoadAtRef = useRef(0);
 
+  useEffect(() => {
+    let isCurrent = true;
+    if (isGuest) {
+      setIsSuperAdmin(false);
+      return () => {
+        isCurrent = false;
+      };
+    }
+
+    getSuperAdminAccess()
+      .then((hasAccess) => {
+        if (isCurrent) setIsSuperAdmin(hasAccess);
+      })
+      .catch(() => {
+        if (isCurrent) setIsSuperAdmin(false);
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [isGuest, user?._id]);
+
   const activeBanners = useMemo(() => {
     if (Array.isArray(bannerAds) && bannerAds.length > 0) return bannerAds;
     return DEFAULT_BANNERS.map((banner) => ({
@@ -782,13 +808,15 @@ export default function HomeScreen() {
     }));
   }, [bannerAds, language]);
 
+  const businessTypes = useBusinessTypes(CATEGORIES, activeLanguage);
+
   const localizedCategories = useMemo(
     () =>
-      CATEGORIES.map((category) => ({
+      businessTypes.map((category) => ({
         ...category,
-        label: getCategoryLabel(category.id, activeLanguage),
+        label: category.label || getCategoryLabel(category.id, activeLanguage),
       })),
-    [language]
+    [businessTypes, activeLanguage]
   );
 
   const bannerMediaViewerUrl = useMemo(() => String(bannerMediaViewer?.url || '').trim(), [bannerMediaViewer?.url]);
@@ -999,6 +1027,24 @@ export default function HomeScreen() {
   const openScreenFromDrawer = (name, params) => {
     setDrawerOpen(false);
     navigation.navigate(name, params);
+  };
+
+  const openMyCompany = async () => {
+    setDrawerOpen(false);
+    try {
+      const company = await getMyCompany();
+      if (!company?._id) throw new Error(t('myCompanyLoadError', 'Unable to load your company.'));
+
+      navigation.navigate('MainTabs', {
+        companyId: String(company._id),
+        currentUserId: String(user?._id || ''),
+      });
+    } catch (error) {
+      Alert.alert(
+        t('drawerMyCompany'),
+        error?.response?.data?.error || error?.message || t('myCompanyLoadError', 'Unable to load your company.')
+      );
+    }
   };
 
   const loadFeaturedCompanies = useCallback(async ({ force = false } = {}) => {
@@ -1417,6 +1463,9 @@ export default function HomeScreen() {
 
   const drawerMainItems = [
     { key: 'home', icon: '🏠', label: t('drawerHome'), active: true, onPress: () => openScreenFromDrawer('ProHome') },
+    { key: 'my-company', icon: '🏢', label: t('drawerMyCompany'), onPress: guardGuest(openMyCompany) },
+    { key: 'accept-team-invitation', icon: '✉️', label: activeLanguage === 'fr' ? 'Accepter une invitation' : 'Accept invitation', onPress: guardGuest(() => openScreenFromDrawer('AcceptTeamInvitation')) },
+    ...(isSuperAdmin ? [{ key: 'super-admin', icon: '🛡️', label: 'Super Admin', onPress: () => openScreenFromDrawer('SuperAdminCatalog') }] : []),
     { key: 'dashboard', icon: '📊', label: t('drawerDashboard'), onPress: guardGuest(() => openScreenFromDrawer('AnalyticsDashboard')) },
     { key: 'profile', icon: '👤', label: t('drawerProfile'), onPress: guardGuest(() => openScreenFromDrawer('Profile')) },
     { key: 'messages', icon: '💬', label: t('tabMessages'), onPress: guardGuest(openDrawerMessages) },

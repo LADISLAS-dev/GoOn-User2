@@ -14,14 +14,30 @@ const companyRoutes = require('./routes/companyRoutes');
 const messageRoutes = require('./routes/messageRoutes');
 const bannerRoutes = require('./routes/bannerRoutes');
 const reportRoutes = require('./routes/reportRoutes');
+const customerRoutes = require('./routes/customerRoutes');
+const employeeRoutes = require('./routes/employeeRoutes');
+const auditLogRoutes = require('./routes/auditLogRoutes');
+const businessTypeRoutes = require('./routes/businessTypeRoutes');
+const adminRoutes = require('./routes/adminRoutes');
+const productRoutes = require('./routes/productRoutes');
+const procurementRoutes = require('./routes/procurementRoutes');
+const invoiceRoutes = require('./routes/invoiceRoutes');
+const salesOrderRoutes = require('./routes/salesOrderRoutes');
+const paymentAccountRoutes = require('./routes/paymentAccountRoutes');
+const onlinePaymentRoutes = require('./routes/onlinePaymentRoutes');
+const { router: providerWebhookRoutes, stripeWebhookHandler } = require('./routes/providerWebhookRoutes');
 const authMiddleware = require('./middleware/authMiddleware');
 const { startAppointmentReminderService } = require('./services/appointmentReminderService');
 const { startNotificationDigestService } = require('./services/notificationDigestService');
+const { syncBusinessModuleCatalog } = require('./services/businessModuleService');
+const { syncPermissionCatalog } = require('./services/rbacService');
+const { syncBusinessTypeCatalog } = require('./services/businessTypeService');
 
 const app = express();
 
 /* ================= MIDDLEWARE ================= */
 app.use(cors({ origin: '*' }));
+app.post('/online-payments/webhooks/stripe', express.raw({ type: 'application/json' }), stripeWebhookHandler);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -37,6 +53,18 @@ app.use('/companies', companyRoutes);
 app.use('/messages', messageRoutes);
 app.use('/banners', bannerRoutes);
 app.use('/reports', reportRoutes);
+app.use('/customers', customerRoutes);
+app.use('/employees', employeeRoutes);
+app.use('/audit-logs', auditLogRoutes);
+app.use('/business-types', businessTypeRoutes);
+app.use('/admin', adminRoutes);
+app.use('/products', productRoutes);
+app.use('/procurement', procurementRoutes);
+app.use('/invoices', invoiceRoutes);
+app.use('/sales-orders', salesOrderRoutes);
+app.use('/payment-accounts', paymentAccountRoutes);
+app.use('/online-payments', onlinePaymentRoutes);
+app.use('/online-payments/webhooks', providerWebhookRoutes);
 
 /* ================= HEALTH ================= */
 app.get('/', (req, res) => {
@@ -57,6 +85,9 @@ const PORT = process.env.PORT || 1992;
 
 const startServer = async () => {
   await connectDB();
+  await syncBusinessModuleCatalog();
+  await syncPermissionCatalog();
+  await syncBusinessTypeCatalog();
   console.log('✅ MongoDB connected');
   startAppointmentReminderService();
   startNotificationDigestService();

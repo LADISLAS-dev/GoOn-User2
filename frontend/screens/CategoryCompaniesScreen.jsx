@@ -562,7 +562,7 @@ export default function CategoryCompaniesScreen() {
   const showAll = Boolean(route.params?.showAll);
   const categoryName = showAll
     ? tr('allCompanies', 'All Companies')
-    : t(`category_${categoryId}`, route.params?.categoryName || `Category ${categoryId}`);
+    : route.params?.categoryName || t(`category_${categoryId}`, `Category ${categoryId}`);
 
   // 📍 Obtenir la localisation de l'utilisateur
   useEffect(() => {

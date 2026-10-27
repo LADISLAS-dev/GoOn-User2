@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { createCompany } from '../services/api';
+import { createCompany, getBusinessTypes } from '../services/api';
 import { useUser } from '../context/UserContext';
 import { useLanguage } from '../context/LanguageContext';
 import AuthPromptModal from '../components/AuthPromptModal';
@@ -24,6 +24,8 @@ import * as Location from 'expo-location';
 import { API_URL } from '../env';
 import { auth } from '../services/firebase';
 import { isLocalAssetUri } from '../utils/profileUtils';
+import { getCategoryLabel } from '../utils/categoryLabels';
+import { getBusinessModuleLabel, getBusinessModulePreviewKeys } from '../utils/businessTypes';
 const C = {
   purple:       '#8B2FC9',
   purpleLight:  '#F3E8FF',
@@ -131,6 +133,7 @@ export default function CreateCompanyScreen() {
   const { t } = useLanguage();
   const imagePicker = useLazyImagePicker();
   const { defaultCategoryId = '1', defaultCategoryName = '' } = route.params || {};
+  const [businessTypes, setBusinessTypes] = useState(CATEGORIES);
   // Formulaire
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -139,6 +142,7 @@ export default function CreateCompanyScreen() {
   const [website, setWebsite] = useState('');
   const [location, setLocation] = useState('');
   const [backgroundImage, setBackgroundImage] = useState(null);
+  const [categorySearch, setCategorySearch] = useState('');
   const [latitude, setLatitude] = useState('');
   const [longitude, setLongitude] = useState('');
   const [selectedCategoryIds, setSelectedCategoryIds] = useState(() => defaultCategoryId ? [defaultCategoryId] : ['1']);
@@ -148,15 +152,41 @@ export default function CreateCompanyScreen() {
   const [locating, setLocating] = useState(false);
   const [locationAccuracy, setLocationAccuracy] = useState(null);
   const [locationUpdatedAt, setLocationUpdatedAt] = useState(null);
-  const selectedCategory = CATEGORIES.find(c => c.id === selectedCategoryIds[0]) || CATEGORIES[0];
+  useEffect(() => {
+    let isCurrent = true;
+    getBusinessTypes()
+      .then((types) => {
+        if (!isCurrent || !types.length) return;
+        setBusinessTypes(types.map((type) => {
+          const localLabel = getCategoryLabel(type.key, language);
+          return {
+            id: type.key,
+            icon: type.icon,
+            moduleKeys: type.moduleKeys || [],
+            label: type.labels?.[language] || (localLabel !== type.key ? localLabel : type.labels?.en),
+          };
+        }));
+      })
+      .catch((error) => console.warn('Unable to load business types:', error?.message || error));
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [language]);
+
+  const selectedCategory = businessTypes.find(c => c.id === selectedCategoryIds[0]) || businessTypes[0];
   const selectedCategoryLabel = t(`category_${selectedCategory.id}`, selectedCategory.label);
-  const orderedCategories = [...CATEGORIES].sort((a, b) => {
+  const orderedCategories = [...businessTypes].sort((a, b) => {
     const aSelected = selectedCategoryIds.includes(a.id);
     const bSelected = selectedCategoryIds.includes(b.id);
     if (aSelected && !bSelected) return -1;
     if (bSelected && !aSelected) return 1;
     return a.label.localeCompare(b.label);
   });
+  const filteredCategories = orderedCategories.filter((category) => (
+    category.label.toLowerCase().includes(categorySearch.trim().toLowerCase())
+  ));
+  const previewModuleKeys = getBusinessModulePreviewKeys(businessTypes, selectedCategoryIds);
   const isValid = name.trim().length >= 2 && selectedCategoryIds.length > 0;
   const { user, isGuest } = useUser();
   const [showAuthPrompt, setShowAuthPrompt] = useState(false);
@@ -338,6 +368,7 @@ export default function CreateCompanyScreen() {
       formData.append('location', locationValue);
       const primaryCategoryId = selectedCategoryIds[0] || defaultCategoryId || '1';
       formData.append('categoryId', primaryCategoryId);
+      formData.append('businessTypeId', primaryCategoryId);
       formData.append('categoryIds', JSON.stringify(selectedCategoryIds));
       // Compatibility fallback for backends expecting owner id in payload.
       formData.append('ownerId', String(user._id));
@@ -473,9 +504,18 @@ export default function CreateCompanyScreen() {
           </FieldCard>
           {/* Catégorie */}
           <SectionLabel text="CATÉGORIES" />
-          <Text style={styles.categoryHelperText}>{t('categoryHint', 'Vous pouvez choisir plusieurs secteurs pour la meme entreprise.')}</Text>
+          <Text style={styles.categoryHelperText}>{t('primaryBusinessTypeHint', 'Le premier secteur sélectionné définit le domaine principal. Vous pouvez ajouter des secteurs complémentaires.')}</Text>
+          <Text style={styles.primaryTypeText}>{t('primaryBusinessType', 'Domaine principal')}: {selectedCategoryLabel}</Text>
+          <TextInput
+            value={categorySearch}
+            onChangeText={setCategorySearch}
+            placeholder={t('searchBusinessTypes', 'Rechercher un domaine')}
+            placeholderTextColor={C.textSecondary}
+            style={styles.categorySearch}
+            accessibilityLabel={t('searchBusinessTypes', 'Rechercher un domaine')}
+          />
           <View style={styles.categoryGrid}>
-            {orderedCategories.map(cat => (
+            {filteredCategories.map(cat => (
               <TouchableOpacity
                 key={cat.id}
                 style={[styles.catChip, selectedCategoryIds.includes(cat.id) && styles.catChipSelected]}
@@ -493,6 +533,18 @@ export default function CreateCompanyScreen() {
               </TouchableOpacity>
             ))}
           </View>
+          {!!previewModuleKeys.length && (
+            <View style={styles.modulePreview}>
+              <Text style={styles.modulePreviewTitle}>{t('modulesEnabledForBusiness', 'Modules prévus pour ce domaine')}</Text>
+              <View style={styles.modulePreviewList}>
+                {previewModuleKeys.map((moduleKey) => (
+                  <View key={moduleKey} style={styles.modulePreviewChip}>
+                    <Text style={styles.modulePreviewText}>{getBusinessModuleLabel(moduleKey, language)}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
           {/* Contact */}
           <SectionLabel text="CONTACT" />
           <FieldCard>
@@ -667,7 +719,14 @@ const styles = StyleSheet.create({
   fieldDivider: { height: StyleSheet.hairlineWidth, backgroundColor: C.separator, marginHorizontal: 16 },
   charCount: { fontSize: 11, color: C.textTertiary, textAlign: 'right', marginTop: 4 },
   categoryHelperText: { fontSize: 12, color: C.textSecondary, marginHorizontal: 20, marginBottom: 12 },
+  primaryTypeText: { color: C.textPrimary, fontSize: 13, fontWeight: '700', marginHorizontal: 20, marginBottom: 8 },
+  categorySearch: { minHeight: 42, marginHorizontal: 16, marginBottom: 10, paddingHorizontal: 12, borderWidth: 1, borderColor: C.separator, borderRadius: 10, backgroundColor: C.card, color: C.textPrimary },
   categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', paddingHorizontal: 16, rowGap: 10 },
+  modulePreview: { marginHorizontal: 16, marginTop: 13, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: C.separator, backgroundColor: C.card },
+  modulePreviewTitle: { color: C.textPrimary, fontSize: 12, fontWeight: '800', marginBottom: 8 },
+  modulePreviewList: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  modulePreviewChip: { paddingHorizontal: 8, paddingVertical: 5, borderRadius: 7, backgroundColor: C.purpleLight },
+  modulePreviewText: { color: C.purpleDark, fontSize: 10, fontWeight: '700' },
   catChip: {
     width: '48.5%',
     minHeight: 118,

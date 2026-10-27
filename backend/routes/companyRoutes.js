@@ -3,7 +3,16 @@ const router = express.Router();
 const path = require('path');
 const mongoose = require('mongoose');
 const Company = require('../models/company');
+const BusinessType = require('../models/BusinessType');
+const Employee = require('../models/Employee');
+const {
+  buildCompanyModuleAssignments,
+  buildDefaultModuleAssignmentsFromDatabase,
+  getCompanyModules,
+} = require('../services/businessModuleService');
 const User = require('../models/User');
+const { hasPermission, resolveCompanyAccess } = require('../services/rbacService');
+const { logAuditEvent } = require('../services/auditLogService');
 const AppointmentAppreciation = require('../models/AppointmentAppreciation');
 const upload = require(path.join(__dirname, '../middleware/upload'));
 const { mediaUpload } = require(path.join(__dirname, '../middleware/upload'));
@@ -252,6 +261,7 @@ router.post('/', authMiddleware, upload.array('images', 10), async (req, res) =>
       location, 
       categoryId, 
       categoryIds,
+      businessTypeId,
       isVerified, 
       logo,
       backgroundImage,
@@ -287,6 +297,14 @@ router.post('/', authMiddleware, upload.array('images', 10), async (req, res) =>
         .filter(Boolean)
     )];
     const primaryCategoryId = String(categoryId || normalizedCategoryIds[0] || '').trim();
+    const requestedBusinessTypeId = String(businessTypeId || '').trim();
+
+    if (requestedBusinessTypeId) {
+      const businessType = await BusinessType.exists({ key: requestedBusinessTypeId, active: true });
+      if (!businessType) {
+        return res.status(400).json({ error: 'Domaine d’activité inconnu ou désactivé.' });
+      }
+    }
 
     if (primaryCategoryId && !normalizedCategoryIds.includes(primaryCategoryId)) {
       normalizedCategoryIds.unshift(primaryCategoryId);
@@ -301,8 +319,10 @@ router.post('/', authMiddleware, upload.array('images', 10), async (req, res) =>
       location: location || locationAddress,
       latitude: latitude ? parseFloat(latitude) : undefined,
       longitude: longitude ? parseFloat(longitude) : undefined,
+      businessTypeId: requestedBusinessTypeId || '',
       categoryId: primaryCategoryId,
       categoryIds: normalizedCategoryIds,
+      enabledModules: await buildDefaultModuleAssignmentsFromDatabase(normalizedCategoryIds),
       isVerified: isVerified === 'true' || isVerified === true,
       ownerId: resolvedOwnerId,
       setupStatus: 'draft',
@@ -556,9 +576,15 @@ router.get('/me', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'Utilisateur introuvable' });
     }
 
-    const company = await Company.findOne({ ownerId: user._id });
+    let company = await Company.findOne({ ownerId: user._id });
     if (!company) {
-      return res.status(404).json({ error: 'Entreprise introuvable pour cet utilisateur' });
+      const membership = await Employee.findOne({ userId: user._id, status: 'active' })
+        .sort({ createdAt: 1 })
+        .select('companyId');
+      if (membership) company = await Company.findById(membership.companyId);
+    }
+    if (!company) {
+      return res.status(404).json({ error: 'Aucune entreprise accessible pour cet utilisateur.' });
     }
 
     res.json(company);
@@ -570,6 +596,81 @@ router.get('/me', authMiddleware, async (req, res) => {
 /* ──────────────────────────────────────────────
    GET /companies/:id → une entreprise par ID
 ────────────────────────────────────────────── */
+router.get('/:id/modules', authMiddleware, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: 'Identifiant d’entreprise invalide.' });
+    }
+
+    const access = await resolveCompanyAccess({
+      firebaseUid: req.user?.uid,
+      companyId: req.params.id,
+      permission: 'modules:read',
+    });
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.message });
+    }
+
+    const modules = await getCompanyModules(access.company, access);
+    return res.json({
+      success: true,
+      data: modules,
+      canManage: access.isOwner || hasPermission(access.role, 'modules:manage'),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/:id/modules', authMiddleware, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ error: 'Identifiant d’entreprise invalide.' });
+    }
+
+    const access = await resolveCompanyAccess({
+      firebaseUid: req.user?.uid,
+      companyId: req.params.id,
+      permission: 'modules:manage',
+    });
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.message });
+    }
+
+    if (!Array.isArray(req.body?.modules)) {
+      return res.status(400).json({ error: 'La liste des modules est invalide.' });
+    }
+
+    const { assignments, unknownKeys } = buildCompanyModuleAssignments(req.body.modules);
+    if (unknownKeys.length) {
+      return res.status(400).json({
+        error: 'Un ou plusieurs modules ne sont pas disponibles.',
+        unknownModules: unknownKeys,
+      });
+    }
+
+    access.company.enabledModules = assignments;
+    await access.company.save();
+    await logAuditEvent(req, {
+      companyId: access.company._id,
+      actorId: access.user._id,
+      action: 'module.update',
+      entityType: 'business_module',
+      entityId: access.company._id,
+      changedFields: ['enabledModules'],
+    });
+
+    const modules = await getCompanyModules(access.company, access);
+    return res.json({
+      success: true,
+      data: modules,
+      canManage: access.isOwner || hasPermission(access.role, 'modules:manage'),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const requesterOwnerId = await resolveOwnerIdFromToken(req);
@@ -582,8 +683,15 @@ router.get('/:id', async (req, res) => {
     const isPubliclyVisible =
       company.setupStatus === 'ready' ||
       Boolean(company.profileValidatedAt);
+    const isActiveEmployee = requesterOwnerId && !isOwner
+      ? Boolean(await Employee.exists({
+          companyId: company._id,
+          userId: requesterOwnerId,
+          status: 'active',
+        }))
+      : false;
 
-    if (!isOwner && !isPubliclyVisible) {
+    if (!isOwner && !isActiveEmployee && !isPubliclyVisible) {
       return res.status(404).json({ error: 'Entreprise introuvable' });
     }
 

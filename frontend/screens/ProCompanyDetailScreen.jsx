@@ -24,14 +24,15 @@ import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { Share } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import api, { getCompanyById } from "../services/api";
+import api, { getCompanyById, getProducts } from "../services/api";
 import { useUser } from "../context/UserContext";
 import { useLanguage } from "../context/LanguageContext";
 import AuthPromptModal from '../components/AuthPromptModal';
 import { auth } from '../services/firebase';
 import { API_URL, APP_DOWNLOAD_URLS } from '../env';
 import { isLocalAssetUri, resolveAvatarUri } from "../utils/profileUtils";
-import { getCategoryLabel } from "../utils/categoryLabels";
+import { useBusinessTypes } from "../hooks/useBusinessTypes";
+import { CompanyCategoryCover, CompanyCategoryPhotoBadge, getCompanyCategoryVisual } from '../components/CompanyCategoryVisual';
 import { LayoutAnimation, UIManager } from "react-native";
 import { Animated } from "react-native";
 import { BlurView } from "expo-blur";
@@ -49,6 +50,16 @@ const PURPLE_LIGHT = "#EDE9FE";
 const PURPLE_MID = "#C4B5FD";
 const RED = "#EF4444";
 const GREEN = "#16A34A";
+
+function formatProductPrice(priceMinor, currency, locale) {
+  try {
+    const code = currency || 'XOF';
+    const digits = new Intl.NumberFormat(locale, { style: 'currency', currency: code }).resolvedOptions().maximumFractionDigits;
+    return new Intl.NumberFormat(locale, { style: 'currency', currency: code }).format((priceMinor || 0) / (10 ** digits));
+  } catch (_) {
+    return `${((priceMinor || 0) / 100).toFixed(2)} ${currency || 'XOF'}`;
+  }
+}
 
 const CATEGORIES = [
   { id: "1", icon: "💻" },
@@ -577,6 +588,10 @@ export default function CompanyDetailScreen({ route, navigation }) {
   const onboardingFlow = route?.params?.onboardingFlow === true;
 
   const [company, setCompany] = useState(null);
+  const [menuProducts, setMenuProducts] = useState([]);
+  const [menuCanCreate, setMenuCanCreate] = useState(false);
+  const [menuProductsLoading, setMenuProductsLoading] = useState(false);
+  const [menuProductsError, setMenuProductsError] = useState('');
   const [loading, setLoading] = useState(true);
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [activeTab, setActiveTab] = useState("services");
@@ -619,13 +634,52 @@ export default function CompanyDetailScreen({ route, navigation }) {
   const carouselImages = company?.carouselImages || [];
   const galleryImages = company?.galleryImages || [];
   const services = company?.services || [];
-  const localizedCategories = useMemo(
-    () => CATEGORIES.map((cat) => ({ ...cat, label: getCategoryLabel(cat.id, activeLanguage) })),
-    [language]
-  );
+  const localizedCategories = useBusinessTypes(CATEGORIES, activeLanguage);
   const selectedCategoryLabels = selectedCategoryIds
-    .map((id) => getCategoryLabel(id, activeLanguage))
+    .map((id) => localizedCategories.find((category) => category.id === id)?.label)
     .filter(Boolean);
+  const primaryCategoryId = normalizeCompanyCategories(company)[0] || '';
+  const isRestaurantBusiness = normalizeCompanyCategories(company).includes('2');
+  const categoryVisual = getCompanyCategoryVisual(primaryCategoryId, localizedCategories, tr('sectorsLabel', 'Business'));
+  useEffect(() => {
+    if (isRestaurantBusiness) setActiveTab('menu');
+    else if (activeTab === 'menu') setActiveTab('services');
+  }, [isRestaurantBusiness, activeTab]);
+
+  useEffect(() => {
+    let isCurrent = true;
+    if (!companyId || !isRestaurantBusiness) {
+      setMenuProducts([]);
+      setMenuCanCreate(false);
+      setMenuProductsError('');
+      setMenuProductsLoading(false);
+      return () => { isCurrent = false; };
+    }
+
+    setMenuProductsLoading(true);
+    getProducts(companyId, { page: 1, limit: 100, status: 'active' })
+      .then((result) => {
+        if (isCurrent) {
+          setMenuProducts(result?.data || []);
+          setMenuCanCreate(Boolean(result?.capabilities?.canCreate));
+        }
+      })
+      .catch((error) => {
+        if (isCurrent) {
+          setMenuProducts([]);
+          setMenuProductsError(error?.response?.data?.error || tr('menuLoadError', 'Unable to load the restaurant menu.'));
+        }
+      })
+      .finally(() => {
+        if (isCurrent) setMenuProductsLoading(false);
+      });
+    return () => { isCurrent = false; };
+  }, [companyId, isRestaurantBusiness, tr]);
+
+  useEffect(() => {
+    if (isRestaurantBusiness) setActiveTab('menu');
+    else if (activeTab === 'menu') setActiveTab('services');
+  }, [isRestaurantBusiness, activeTab]);
   const ownerId =
     typeof company?.ownerId === "object"
       ? company?.ownerId?._id
@@ -1744,6 +1798,7 @@ export default function CompanyDetailScreen({ route, navigation }) {
                         style={styles.carouselImg}
                       />
                     )}
+                    <CompanyCategoryPhotoBadge visual={categoryVisual} />
                     {canEdit && (
                       <>
                         <TouchableOpacity
@@ -1792,11 +1847,12 @@ export default function CompanyDetailScreen({ route, navigation }) {
               </View>
             </View>
           ) : (
-            <View style={styles.emptyCarousel}>
-              <Text style={styles.emptyCarouselText}>
-                {tr('noPhotoAddPrompt', 'No photo yet. Tap + to add one.')}
-              </Text>
-            </View>
+            <CompanyCategoryCover
+              companyName={company?.name}
+              description={company?.description}
+              visual={categoryVisual}
+              fallbackDescription={tr('companyCategoryIntro', 'Show customers what makes this business special.')}
+            />
           )}
 
           {canEdit && (
@@ -1846,6 +1902,17 @@ export default function CompanyDetailScreen({ route, navigation }) {
                   {tr('sectorsLabel', 'Sectors')}
                 </Text>
               </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.quickActionBtn}
+                onPress={() => navigation.navigate('BusinessModules', {
+                  companyId: company._id,
+                  returnScreen: normalizeCompanyCategories(company).includes('2') ? 'RestaurantDashboard' : 'CompanyOverview',
+                })}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.quickActionText}>{tr('businessModules', 'Modules métier')}</Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -1867,32 +1934,82 @@ export default function CompanyDetailScreen({ route, navigation }) {
 
         {/* TABS */}
         <View style={styles.tabRow}>
-          {["services", "gallery"].map((tab) => (
+          {(isRestaurantBusiness ? ['menu', 'services', 'gallery'] : ['services', 'gallery']).map((tab) => (
             <TouchableOpacity
               key={tab}
               style={[
                 styles.tab,
+                isRestaurantBusiness && styles.restaurantTab,
                 activeTab === tab &&
-                  (tab === "services"
-                    ? styles.tabActive
-                    : styles.tabActiveOutline),
+                  (isRestaurantBusiness
+                    ? styles.restaurantTabActive
+                    : tab === 'services' ? styles.tabActive : styles.tabActiveOutline),
               ]}
               onPress={() => setActiveTab(tab)}
             >
               <Text
                 style={[
                   styles.tabText,
+                  isRestaurantBusiness && styles.restaurantTabText,
                   activeTab === tab &&
-                    (tab === "services"
-                      ? styles.tabTextActive
-                      : styles.tabTextOutline),
+                    (isRestaurantBusiness
+                      ? styles.restaurantTabTextActive
+                      : tab === 'services' ? styles.tabTextActive : styles.tabTextOutline),
                 ]}
               >
-                {tab === "services" ? tr('services', 'Services') : `${tr('tabGallery', 'Gallery')} 🖼`}
+                {tab === 'menu' ? tr('restaurantMenu', 'Menu') : tab === 'services' ? tr('services', 'Services') : `${tr('tabGallery', 'Gallery')} 🖼`}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
+
+        {activeTab === 'menu' && isRestaurantBusiness ? (
+          <View style={styles.restaurantMenuSection}>
+            <View style={styles.restaurantMenuHeader}>
+              <View style={styles.restaurantMenuHeading}>
+                <Text style={styles.restaurantMenuEyebrow}>{tr('restaurantMenu', 'MENU')}</Text>
+                <Text style={styles.restaurantMenuTitle}>{tr('restaurantMenuTitle', 'Menu & availability')}</Text>
+              </View>
+              {canEdit && menuCanCreate ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  style={styles.restaurantAddButton}
+                  onPress={() => navigation.getParent()?.navigate('Inventory', { companyId })}
+                >
+                  <Text style={styles.restaurantAddButtonText}>＋ {tr('addMenuItem', 'Add item')}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            {menuProductsLoading ? <ActivityIndicator color="#C4B5FD" style={styles.restaurantMenuLoader} /> : null}
+            {!menuProductsLoading && menuProductsError ? <Text style={styles.restaurantMenuEmpty}>{menuProductsError}</Text> : null}
+            {!menuProductsLoading && !menuProductsError && !menuProducts.length ? (
+              <View style={styles.restaurantMenuEmptyState}>
+                <Text style={styles.restaurantMenuEmptyIcon}>🍽️</Text>
+                <Text style={styles.restaurantMenuEmpty}>{tr('menuEmpty', 'The restaurant menu is empty.')}</Text>
+                {canEdit && menuCanCreate ? (
+                  <TouchableOpacity style={styles.restaurantAddButton} onPress={() => navigation.getParent()?.navigate('Inventory', { companyId })}>
+                    <Text style={styles.restaurantAddButtonText}>＋ {tr('addFirstMenuItem', 'Add the first dish')}</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            ) : null}
+            {!menuProductsLoading && !menuProductsError ? menuProducts.map((item) => (
+              <View key={String(item._id)} style={styles.restaurantMenuRow}>
+                {item.imageUrl ? <Image source={{ uri: imgUrl(item.imageUrl) }} style={styles.restaurantMenuImage} /> : <View style={styles.restaurantMenuImageEmpty}><Text>🍲</Text></View>}
+                <View style={styles.restaurantMenuItemCopy}>
+                  <Text style={styles.restaurantMenuItemName} numberOfLines={1}>{item.name}</Text>
+                  <Text style={styles.restaurantMenuItemMeta} numberOfLines={1}>{item.category || tr('otherMenuItems', 'Other')} · {formatProductPrice(item.priceMinor, item.currency, activeLanguage === 'fr' ? 'fr-FR' : 'en-US')}</Text>
+                  {item.isAvailable === false ? <Text style={styles.restaurantMenuUnavailable}>{tr('unavailable', 'Unavailable')}</Text> : null}
+                </View>
+                {canEdit ? (
+                  <TouchableOpacity onPress={() => navigation.getParent()?.navigate('Inventory', { companyId })} accessibilityRole="button">
+                    <Text style={styles.restaurantMenuManage}>{tr('manage', 'Manage')} ↗</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            )) : null}
+          </View>
+        ) : null}
 
         {/* SERVICES */}
         {activeTab === "services" && (
@@ -3015,6 +3132,10 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     gap: 10,
   },
+  restaurantTab: { backgroundColor: '#19151D', borderColor: '#302B35', borderRadius: 10 },
+  restaurantTabActive: { backgroundColor: '#EF476F', borderColor: '#EF476F' },
+  restaurantTabText: { color: '#A8A1AA' },
+  restaurantTabTextActive: { color: '#FFFFFF' },
   tab: {
     flex: 1,
     paddingVertical: 12,
@@ -3038,6 +3159,25 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   sectionTitle: { fontSize: 16, fontWeight: "700", color: "#333" },
+  restaurantMenuSection: { marginHorizontal: 14, marginBottom: 36, padding: 16, borderRadius: 16, backgroundColor: '#100D13', borderWidth: 1, borderColor: '#302B35' },
+  restaurantMenuHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 12 },
+  restaurantMenuHeading: { flex: 1 },
+  restaurantMenuEyebrow: { color: '#FF8298', fontSize: 9, fontWeight: '800', letterSpacing: 1 },
+  restaurantMenuTitle: { color: '#F8F5F7', fontSize: 18, fontWeight: '800', marginTop: 4 },
+  restaurantAddButton: { minHeight: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 11, borderRadius: 8, backgroundColor: '#EF476F' },
+  restaurantAddButtonText: { color: '#FFFFFF', fontSize: 10, fontWeight: '800' },
+  restaurantMenuLoader: { marginVertical: 22 },
+  restaurantMenuEmptyState: { alignItems: 'center', paddingVertical: 22, gap: 9 },
+  restaurantMenuEmptyIcon: { fontSize: 28 },
+  restaurantMenuEmpty: { color: '#A8A1AA', fontSize: 11, lineHeight: 16 },
+  restaurantMenuRow: { minHeight: 70, flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, borderTopWidth: 1, borderTopColor: '#302B35' },
+  restaurantMenuImage: { width: 52, height: 52, borderRadius: 9, backgroundColor: '#242029' },
+  restaurantMenuImageEmpty: { width: 52, height: 52, alignItems: 'center', justifyContent: 'center', borderRadius: 9, backgroundColor: '#242029' },
+  restaurantMenuItemCopy: { flex: 1 },
+  restaurantMenuItemName: { color: '#F8F5F7', fontSize: 12, fontWeight: '700' },
+  restaurantMenuItemMeta: { color: '#A8A1AA', fontSize: 10, marginTop: 4 },
+  restaurantMenuUnavailable: { color: '#F2BE6E', fontSize: 9, fontWeight: '700', marginTop: 3 },
+  restaurantMenuManage: { color: '#FF8298', fontSize: 10, fontWeight: '800', paddingVertical: 8, paddingLeft: 4 },
   addSvcBtn: {
     backgroundColor: PURPLE_LIGHT,
     paddingHorizontal: 14,

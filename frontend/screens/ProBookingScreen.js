@@ -188,10 +188,8 @@ export default function BookingScreen(props) {
       setCompany(companyData);
 
       const ownerId = String(companyData?.ownerId?._id || companyData?.ownerId || "");
-      const isOwner = !!currentUserId && ownerId === currentUserId;
-      const apptData = await (isOwner
-        ? getAppointmentsByCompany(companyId).catch(() => [])
-        : getMyAppointmentsByCompany(companyId).catch(() => []));
+      const apptData = await getAppointmentsByCompany(companyId)
+        .catch(() => getMyAppointmentsByCompany(companyId).catch(() => []));
 
       // Filtrer uniquement les rendez-vous impliquant le propriétaire de l'entreprise
       const ownerFiltered = ownerId

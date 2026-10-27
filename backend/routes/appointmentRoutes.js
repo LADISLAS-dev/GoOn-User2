@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 
 const Appointment = require('../models/Appointment');
@@ -13,6 +14,8 @@ const {
   getUserNotificationLanguage,
 } = require('../utils/notificationLocalization');
 const AppointmentAppreciation = require('../models/AppointmentAppreciation');
+const { hasPermission, resolveCompanyAccess } = require('../services/rbacService');
+const { logAuditEvent } = require('../services/auditLogService');
 
 const {
   createAppointment,
@@ -61,9 +64,15 @@ router.get('/:id/appreciations', authMiddleware, async (req, res) => {
     const senderId = String(appointment.senderId?._id || appointment.senderId);
     const receiverId = String(appointment.receiverId?._id || appointment.receiverId);
     const currentUserId = String(currentUser._id);
+    const isParticipant = currentUserId === senderId || currentUserId === receiverId;
 
-    if (currentUserId !== senderId && currentUserId !== receiverId) {
-      return res.status(403).json({ error: 'Forbidden' });
+    if (!isParticipant) {
+      const access = await resolveCompanyAccess({
+        firebaseUid: req.user?.uid,
+        companyId: appointment.companyId,
+        permission: 'analytics:read',
+      });
+      if (access.error) return res.status(access.error.status).json({ error: access.error.message });
     }
 
     const appreciations = await AppointmentAppreciation.find({ appointmentId: appointment._id })
@@ -71,13 +80,13 @@ router.get('/:id/appreciations', authMiddleware, async (req, res) => {
       .populate('reviewedUserId', 'name email avatar')
       .sort({ createdAt: -1 });
 
-    const mine = appreciations.find(
+    const mine = isParticipant ? appreciations.find(
       (a) => String(a.reviewerId?._id || a.reviewerId) === currentUserId
-    ) || null;
+    ) || null : null;
 
-    const fromOther = appreciations.find(
+    const fromOther = isParticipant ? appreciations.find(
       (a) => String(a.reviewedUserId?._id || a.reviewedUserId) === currentUserId
-    ) || null;
+    ) || null : null;
 
     return res.json({
       appointmentId: String(appointment._id),
@@ -230,24 +239,24 @@ router.post('/', authMiddleware, async (req, res) => {
 
 router.get('/company/:companyId', authMiddleware, async (req, res) => {
   try {
-    const currentUser = await getCurrentMongoUser(req);
-    if (!currentUser) {
-      return res.status(401).json({ error: 'Authenticated user not found in MongoDB' });
+    if (!mongoose.Types.ObjectId.isValid(req.params.companyId)) {
+      return res.status(400).json({ error: 'Invalid company ID' });
     }
 
-    const company = await Company.findById(req.params.companyId);
-    if (!company) {
-      return res.status(404).json({ error: 'Company not found' });
+    const access = await resolveCompanyAccess({
+      firebaseUid: req.user?.uid,
+      companyId: req.params.companyId,
+      permission: 'appointments:read',
+    });
+    if (access.error) return res.status(access.error.status).json({ error: access.error.message });
+    if (!access.isOwner && !hasPermission(access.role, 'analytics:read')) {
+      return res.status(403).json({ error: 'Analytics permission required' });
     }
 
-    if (String(company.ownerId) !== String(currentUser._id)) {
-      return res.status(403).json({ error: 'Forbidden' });
-    }
-
-    const ownerId = String(company.ownerId || '');
+    const ownerId = String(access.company.ownerId || '');
 
     const appointments = await Appointment.find({
-      companyId: company._id,
+      companyId: access.company._id,
       $or: [
         { senderId: ownerId },
         { receiverId: ownerId },
@@ -324,9 +333,15 @@ router.get('/:id', authMiddleware, async (req, res) => {
 
     const senderId = String(appointment.senderId?._id || appointment.senderId);
     const receiverId = String(appointment.receiverId?._id || appointment.receiverId);
+    const isParticipant = senderId === String(currentUser._id) || receiverId === String(currentUser._id);
 
-    if (senderId !== String(currentUser._id) && receiverId !== String(currentUser._id)) {
-      return res.status(403).json({ error: 'Forbidden' });
+    if (!isParticipant) {
+      const access = await resolveCompanyAccess({
+        firebaseUid: req.user?.uid,
+        companyId: appointment.companyId,
+        permission: 'appointments:read',
+      });
+      if (access.error) return res.status(access.error.status).json({ error: access.error.message });
     }
 
     res.json(appointment);
@@ -352,10 +367,19 @@ router.patch('/:id', authMiddleware, async (req, res) => {
       });
     }
 
-    if (
-      String(existing.senderId) !== String(currentUser._id) &&
-      String(existing.receiverId) !== String(currentUser._id)
-    ) {
+    const isParticipant = [existing.senderId, existing.receiverId]
+      .some((participantId) => String(participantId) === String(currentUser._id));
+    const companyAccess = await resolveCompanyAccess({
+      firebaseUid: req.user?.uid,
+      companyId: existing.companyId,
+      permission: 'appointments:manage',
+    });
+    const isCompanyManager = !companyAccess.error;
+
+    if (!isParticipant && !isCompanyManager) {
+      if (companyAccess.error?.status === 401) {
+        return res.status(companyAccess.error.status).json({ error: companyAccess.error.message });
+      }
       return res.status(403).json({ error: 'Forbidden' });
     }
 
@@ -381,10 +405,22 @@ router.patch('/:id', authMiddleware, async (req, res) => {
 
     const statusChanged = String(existing.status || '') !== nextStatus;
     if (statusChanged) {
-      const targetUserId =
-        String(existing.senderId) === String(currentUser._id)
-          ? existing.receiverId
-          : existing.senderId;
+      await logAuditEvent(req, {
+        companyId: existing.companyId,
+        actorId: currentUser._id,
+        action: 'appointment.update',
+        entityType: 'appointment',
+        entityId: existing._id,
+        changedFields: nextStatus === 'cancelled' && updatePayload.cancellationReason
+          ? ['status', 'cancellationReason']
+          : ['status'],
+      });
+    }
+    if (statusChanged) {
+      const companyOwnerId = String(companyAccess.company?.ownerId || '');
+      const targetUserId = isCompanyManager
+        ? (String(existing.senderId) === companyOwnerId ? existing.receiverId : existing.senderId)
+        : (String(existing.senderId) === String(currentUser._id) ? existing.receiverId : existing.senderId);
 
       const targetUser = await User.findById(targetUserId);
       if (targetUser) {
@@ -468,10 +504,17 @@ router.delete('/:id', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'Appointment not found' });
     }
 
-    if (
-      String(existing.senderId) !== String(currentUser._id) &&
-      String(existing.receiverId) !== String(currentUser._id)
-    ) {
+    const isParticipant = [existing.senderId, existing.receiverId]
+      .some((participantId) => String(participantId) === String(currentUser._id));
+    const companyAccess = await resolveCompanyAccess({
+      firebaseUid: req.user?.uid,
+      companyId: existing.companyId,
+      permission: 'appointments:manage',
+    });
+    if (!isParticipant && companyAccess.error) {
+      if (companyAccess.error.status === 401) {
+        return res.status(companyAccess.error.status).json({ error: companyAccess.error.message });
+      }
       return res.status(403).json({ error: 'Forbidden' });
     }
 
@@ -484,6 +527,13 @@ router.delete('/:id', authMiddleware, async (req, res) => {
     }
 
     await Appointment.deleteOne({ _id: existing._id });
+    await logAuditEvent(req, {
+      companyId: existing.companyId,
+      actorId: currentUser._id,
+      action: 'appointment.delete',
+      entityType: 'appointment',
+      entityId: existing._id,
+    });
 
     return res.json({
       success: true,

@@ -151,7 +151,7 @@ function createSmoothPath(points) {
   return d;
 }
 
-export default function AnalyticsDashboardScreen() {
+export default function AnalyticsDashboardScreen({ companyId: fixedCompanyId = '' }) {
   const { t } = useLanguage();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -237,6 +237,14 @@ export default function AnalyticsDashboardScreen() {
   }, [t]);
 
   const loadCompanies = useCallback(async () => {
+    if (fixedCompanyId) {
+      const companyRes = await api.get(`/companies/${fixedCompanyId}`);
+      const company = companyRes?.data?.data || companyRes?.data;
+      const list = company?._id ? [company] : [];
+      setCompanies(list);
+      return list;
+    }
+
     const res = await api.get('/companies', { params: { compact: '1' } });
     const list = Array.isArray(res?.data?.data) ? res.data.data : [];
 
@@ -259,7 +267,7 @@ export default function AnalyticsDashboardScreen() {
 
     setCompanies([]);
     return [];
-  }, []);
+  }, [fixedCompanyId]);
 
   useEffect(() => {
     (async () => {
@@ -424,31 +432,33 @@ export default function AnalyticsDashboardScreen() {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>{t('analyticsByCompany')}</Text>
-          <FlatList
-            horizontal
-            data={companies}
-            keyExtractor={(item) => String(item._id)}
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.companyList}
-            renderItem={({ item }) => {
-              const active = String(item._id) === String(selectedCompanyId);
-              return (
-                <TouchableOpacity
-                  style={[styles.companyChip, active && styles.companyChipActive]}
-                  activeOpacity={0.8}
-                  onPress={() => onSelectCompany(item._id)}
-                >
-                  <Text style={[styles.companyChipText, active && styles.companyChipTextActive]}>
-                    {item.name}
-                  </Text>
-                </TouchableOpacity>
-              );
-            }}
-            ListEmptyComponent={<Text style={styles.emptyText}>{t('analyticsNoCompanyList')}</Text>}
-          />
-        </View>
+        {!fixedCompanyId && (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>{t('analyticsByCompany')}</Text>
+            <FlatList
+              horizontal
+              data={companies}
+              keyExtractor={(item) => String(item._id)}
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.companyList}
+              renderItem={({ item }) => {
+                const active = String(item._id) === String(selectedCompanyId);
+                return (
+                  <TouchableOpacity
+                    style={[styles.companyChip, active && styles.companyChipActive]}
+                    activeOpacity={0.8}
+                    onPress={() => onSelectCompany(item._id)}
+                  >
+                    <Text style={[styles.companyChipText, active && styles.companyChipTextActive]}>
+                      {item.name}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              }}
+              ListEmptyComponent={<Text style={styles.emptyText}>{t('analyticsNoCompanyList')}</Text>}
+            />
+          </View>
+        )}
 
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
