@@ -1649,6 +1649,11 @@ export default function HomeScreen() {
     const type = String(notification?.type || '').toLowerCase();
     setNotifOpen(false);
 
+    if (type === 'order') {
+      navigation.navigate('MyOrders');
+      return;
+    }
+
     if (type === 'appointment' && notification?.appointmentId) {
       navigation.navigate('MainTabs', {
         screen: 'CompanyHome',
@@ -2143,6 +2148,8 @@ export default function HomeScreen() {
     { key: 'home', icon: '🏠', label: t('drawerHome'), active: true, onPress: () => openScreenFromDrawer(isProMode ? 'ProHome' : 'UserHome') },
     { key: 'dashboard', icon: '📊', label: t('drawerDashboard'), onPress: () => openScreenFromDrawer('AnalyticsDashboard') },
     { key: 'profile', icon: '👤', label: t('drawerProfile'), onPress: () => openScreenFromDrawer('Profile') },
+    { key: 'payment-methods', icon: '💳', label: tr('drawerPaymentMethods', activeLanguage === 'fr' ? 'Mes cartes' : 'My cards'), onPress: () => openScreenFromDrawer('PaymentMethods') },
+    { key: 'my-orders', icon: '🧾', label: tr('drawerMyOrders', activeLanguage === 'fr' ? 'Mes commandes' : 'My orders'), onPress: () => openScreenFromDrawer('MyOrders') },
     { key: 'messages', icon: '💬', label: t('tabMessages'), onPress: openDrawerMessages },
     {
       key: 'bookings',

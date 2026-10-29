@@ -8,6 +8,7 @@ const salesOrderLineSchema = new mongoose.Schema(
     quantity: { type: Number, required: true, min: 1 },
     unitPriceMinor: { type: Number, required: true, min: 0 },
     lineTotalMinor: { type: Number, required: true, min: 0 },
+    note: { type: String, default: '', trim: true, maxlength: 200 },
   },
   { _id: true }
 );
@@ -19,9 +20,15 @@ const salesOrderSchema = new mongoose.Schema(
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     orderNumber: { type: String, required: true, trim: true, maxlength: 48 },
-    status: { type: String, enum: ['draft', 'confirmed', 'fulfilled', 'cancelled'], default: 'draft', index: true },
-    channel: { type: String, enum: ['pro', 'restaurant_app'], default: 'pro', index: true },
+    status: { type: String, enum: ['draft', 'confirmed', 'ready', 'fulfilled', 'cancelled'], default: 'draft', index: true },
+    channel: { type: String, enum: ['pro', 'restaurant_app', 'retail_app'], default: 'pro', index: true },
     tableNumber: { type: String, default: '', trim: true, maxlength: 24 },
+    fulfillmentType: { type: String, enum: ['dine_in', 'takeaway', 'pickup', 'delivery'], default: 'dine_in' },
+    deliveryAddress: { type: String, default: '', trim: true, maxlength: 500 },
+    deliveryLatitude: { type: Number, default: null, min: -90, max: 90 },
+    deliveryLongitude: { type: Number, default: null, min: -180, max: 180 },
+    deliveryDistanceKm: { type: Number, default: 0, min: 0, max: 500 },
+    deliveryFeeMinor: { type: Number, default: 0, min: 0 },
     tipRateBps: { type: Number, default: 0, min: 0, max: 1500 },
     tipMinor: { type: Number, default: 0, min: 0 },
     paymentMethod: { type: String, enum: ['pay_at_venue', 'stripe', 'paypal'], default: 'pay_at_venue' },
@@ -29,6 +36,9 @@ const salesOrderSchema = new mongoose.Schema(
     paidMinor: { type: Number, default: 0, min: 0 },
     stripeCheckoutSessionId: { type: String, default: '', trim: true },
     stripePaymentIntentId: { type: String, default: '', trim: true },
+    stripeAccountId: { type: String, default: '', trim: true },
+    stripeMode: { type: String, enum: ['test', 'live'], default: null },
+    stripeApplicationFeeMinor: { type: Number, default: 0, min: 0 },
     paypalOrderId: { type: String, default: '', trim: true },
     paypalAuthorizationId: { type: String, default: '', trim: true },
     customer: {
@@ -40,6 +50,7 @@ const salesOrderSchema = new mongoose.Schema(
     lines: { type: [salesOrderLineSchema], required: true, validate: (lines) => lines.length > 0 },
     totalMinor: { type: Number, required: true, min: 0 },
     confirmedAt: { type: Date, default: null },
+    readyAt: { type: Date, default: null },
     fulfilledAt: { type: Date, default: null },
     cancelledAt: { type: Date, default: null },
     notes: { type: String, default: '', trim: true, maxlength: 1000 },
@@ -49,5 +60,6 @@ const salesOrderSchema = new mongoose.Schema(
 
 salesOrderSchema.index({ companyId: 1, orderNumber: 1 }, { unique: true });
 salesOrderSchema.index({ companyId: 1, status: 1, createdAt: -1 });
+salesOrderSchema.index({ createdBy: 1, channel: 1, createdAt: -1 });
 
 module.exports = mongoose.model('SalesOrder', salesOrderSchema);

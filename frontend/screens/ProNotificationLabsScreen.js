@@ -117,14 +117,16 @@ export default function NotificationLabsScreen() {
     setSaving(true);
     try {
       const saved = await saveNotificationPreferences(next);
-      await updateNotificationPreferencesApi(saved).catch(() => null);
+      if (isAuthenticated) {
+        await updateNotificationPreferencesApi(saved).catch(() => null);
+      }
       setPrefs(saved);
       setNotificationDisplayPreferences(saved);
       return saved;
     } finally {
       setSaving(false);
     }
-  }, []);
+  }, [isAuthenticated]);
 
   const handleMasterToggle = useCallback(async (enabled) => {
     const saved = await persist({ ...prefs, masterEnabled: enabled });

@@ -16,6 +16,7 @@ import { useLanguage } from '../context/LanguageContext';
 import AuthPromptModal from '../components/AuthPromptModal';
 import ReportModal from '../components/ReportModal';
 import { resolveAvatarUri } from '../utils/profileUtils';
+import { getServiceRequestCategoryId, isInPersonServiceCategory } from '../utils/businessTypes';
 
 const { width } = Dimensions.get("window");
 
@@ -124,6 +125,12 @@ export default function ServiceDetailScreen({ route, navigation }) {
   const { t } = useLanguage();
   const { service } = route.params || {};
   const companyId = route?.params?.companyId;
+  const isTechnologyBusiness = String(route?.params?.businessCategoryId || '') === '1';
+  const isBeautyBusiness = String(route?.params?.businessCategoryId || '') === '3';
+  const isHealthBusiness = String(route?.params?.businessCategoryId || '') === '4';
+  const serviceRequestCategoryId = getServiceRequestCategoryId([route?.params?.businessCategoryId]);
+  const isServiceRequestBusiness = !!serviceRequestCategoryId;
+  const isQuoteBased = (isTechnologyBusiness || isBeautyBusiness || isHealthBusiness || isServiceRequestBusiness) && Number(service?.price || 0) <= 0;
   const [showFullDescription, setShowFullDescription] = useState(false);
   const hasVideo = !!service?.video;
   const videoUrl = hasVideo ? (resolveAvatarUri(service.video, API_URL) || null) : null;
@@ -249,7 +256,13 @@ export default function ServiceDetailScreen({ route, navigation }) {
             <View style={styles.priceContainer}>
               <Text style={styles.priceLabel}>{t('priceLabel', 'Price')}</Text>
               <Text style={styles.price}>
-                ${Number(service.price || 0).toFixed(2)}
+                {isQuoteBased
+                  ? isTechnologyBusiness
+                    ? t('technologyQuoteLabel', 'On request')
+                    : isBeautyBusiness
+                      ? t('beautyQuoteLabel', 'Price on request')
+                      : isHealthBusiness ? t('healthPriceLabel', 'Price to confirm') : t('serviceRequestPriceLabel', 'On request')
+                  : `$${Number(service.price || 0).toFixed(2)}`}
               </Text>
             </View>
 
@@ -260,10 +273,30 @@ export default function ServiceDetailScreen({ route, navigation }) {
                 isGuest ? setShowAuthPrompt(true) : navigation.navigate("CreateAppointment", {
                   companyId,
                   service,
+                  ...(isHealthBusiness
+                    ? { appointmentTitlePrefix: t('healthBookingPrefix', 'Consultation'), defaultAppointmentType: 'in_person', appointmentLocation: route?.params?.appointmentLocation || '' }
+                    : isBeautyBusiness
+                      ? { appointmentTitlePrefix: t('beautyBookingPrefix', 'Appointment'), defaultAppointmentType: 'in_person', appointmentLocation: route?.params?.appointmentLocation || '' }
+                      : isServiceRequestBusiness
+                        ? {
+                            ...(isQuoteBased ? { appointmentTitlePrefix: t('serviceRequestPrefix', 'Service request') } : {}),
+                            ...(isInPersonServiceCategory(serviceRequestCategoryId)
+                              ? { defaultAppointmentType: 'in_person', appointmentLocation: route?.params?.appointmentLocation || '' }
+                              : {}),
+                          }
+                    : isQuoteBased ? { appointmentTitlePrefix: t('technologyConsultationPrefix', 'Consultation request') } : {}),
                 });
               }}
             >
-              <Text style={styles.buttonText}>{t('bookService', 'Book this service')} →</Text>
+              <Text style={styles.buttonText}>
+                {isHealthBusiness
+                  ? t('healthBookingAction', 'Request an appointment')
+                  : isBeautyBusiness
+                    ? t('beautyBookingAction', 'Book an appointment')
+                    : isServiceRequestBusiness && isQuoteBased
+                      ? t('serviceRequestAction', 'Request this service')
+                      : isQuoteBased ? t('technologyConsultationAction', 'Request a consultation') : t('bookService', 'Book this service')} →
+              </Text>
             </TouchableOpacity>
 
             {/* ── Bouton Signaler ── */}

@@ -3,10 +3,12 @@ const Company = require('../models/company');
 const SalesOrder = require('../models/SalesOrder');
 const { logAuditEvent } = require('../services/auditLogService');
 const {
+  disconnectStripeOAuthAccount,
   getPaypalBaseUrl,
   paypalAccessToken,
 } = require('../services/paymentAccountService');
 const {
+  getStripeAccountIdForOrder,
   recordCapturedPayment,
   verifyStripeCheckoutSession,
   voidOnlinePayment,
@@ -32,6 +34,19 @@ async function stripeWebhookHandler(req, res) {
   }
 
   const resource = event.data?.object;
+  if (event.type === 'account.application.deauthorized') {
+    if (!event.account) return res.json({ received: true });
+    try {
+      const company = await Company.findOne({ 'paymentAccounts.stripe.accountId': String(event.account) });
+      if (company) {
+        await disconnectStripeOAuthAccount(company, event.account, event.livemode ? 'live' : 'test');
+      }
+      return res.json({ received: true });
+    } catch (error) {
+      console.error('Stripe OAuth deauthorization handler failed:', error?.message || error);
+      return res.status(500).json({ error: 'Impossible de déconnecter le compte Stripe.' });
+    }
+  }
   if (!resource?.id || !event.account) {
     return res.json({ received: true });
   }
@@ -43,7 +58,7 @@ async function stripeWebhookHandler(req, res) {
       });
       if (!sessionOrder) return res.json({ received: true });
       const sessionCompany = await Company.findById(sessionOrder.companyId).select('paymentAccounts');
-      if (!sessionCompany || String(sessionCompany.paymentAccounts?.stripe?.accountId) !== String(event.account)) {
+      if (!sessionCompany || getStripeAccountIdForOrder(sessionOrder, sessionCompany) !== String(event.account)) {
         return res.status(400).json({ error: 'Compte Stripe non correspondant.' });
       }
       const paymentIntentId = await verifyStripeCheckoutSession(sessionOrder, sessionCompany, resource.id);
@@ -80,7 +95,7 @@ async function stripeWebhookHandler(req, res) {
     const order = await SalesOrder.findOne({ stripePaymentIntentId: intent.id });
     if (!order) return res.json({ received: true });
     const company = await Company.findById(order.companyId).select('paymentAccounts');
-    if (!company || String(company.paymentAccounts?.stripe?.accountId) !== String(event.account)) {
+    if (!company || getStripeAccountIdForOrder(order, company) !== String(event.account)) {
       return res.status(400).json({ error: 'Compte Stripe non correspondant.' });
     }
     if (String(intent.currency || '').toUpperCase() !== order.currency || intent.amount !== order.totalMinor) {

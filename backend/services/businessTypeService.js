@@ -1,10 +1,10 @@
 const BusinessType = require('../models/BusinessType');
 
-const APPOINTMENT_TYPE_KEYS = new Set(['2', '3', '4', '8', '9', '11', '16', '29', '30']);
-const INVENTORY_TYPE_KEYS = new Set(['2', '3', '12', '13', '15', '19', '26', '27', '32', '33']);
-const INVOICE_TYPE_KEYS = new Set(['2', '3', '4', '7', '9', '11', '15', '16', '27', '29', '30', '32', '33', '34', '35']);
-const SALES_ORDER_TYPE_KEYS = new Set(['2', '15', '27']);
-const BUSINESS_TYPE_CATALOG_VERSION = 5;
+const APPOINTMENT_TYPE_KEYS = new Set(['1', '2', '3', '4', '5', '8', '9', '11', '16', '17', '18', '23', '26', '28', '29', '30', '31', '32', '33', '34', '35', '37', '38', '39', '40']);
+const INVENTORY_TYPE_KEYS = new Set(['2', '3', '12', '13', '15', '19', '25', '26', '27', '32', '33', '36']);
+const INVOICE_TYPE_KEYS = new Set(['2', '3', '4', '7', '9', '11', '12', '13', '15', '16', '25', '27', '29', '30', '32', '33', '34', '35', '36']);
+const SALES_ORDER_TYPE_KEYS = new Set(['2', '12', '13', '15', '25', '27', '36']);
+const BUSINESS_TYPE_CATALOG_VERSION = 7;
 
 function normalizeBusinessTypeKey(value) {
   const key = String(value || '').trim().toLowerCase();

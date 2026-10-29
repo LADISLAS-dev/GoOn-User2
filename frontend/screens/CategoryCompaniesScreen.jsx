@@ -961,11 +961,18 @@ export default function CategoryCompaniesScreen() {
       return;
     }
 
+    const companyWithCategoryContext = !showAll && String(categoryId) === '3'
+      ? {
+          ...company,
+          categoryIds: [...new Set([...(Array.isArray(company.categoryIds) ? company.categoryIds.map(String) : []), '3'])],
+        }
+      : company;
+
     navigation.navigate('MainTabs', {
       screen: 'CompanyHome',
       params: {
         screen: 'CompanyOverview',
-        params: { companyId, company, currentUserId: user?._id },
+        params: { companyId, company: companyWithCategoryContext, currentUserId: user?._id },
         companyId,
         currentUserId: user?._id,
       },

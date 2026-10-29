@@ -4,6 +4,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useLanguage } from '../context/LanguageContext';
 import { useUser } from '../context/UserContext';
 import AuthPromptModal from '../components/AuthPromptModal';
+import ThemePicker from '../components/ThemePicker';
 const COLORS = {
   background: '#F7F5F1',
   surface: '#FFFFFF',
@@ -153,6 +154,7 @@ export default function SettingsScreen() {
           <Text style={styles.title}>{t('language')}</Text>
           <Text style={styles.subtitle}>{t('currentLanguage')}: {langLabel(language) || language}</Text>
         </View>
+        <ThemePicker language={activeLanguage} />
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <Text style={styles.sectionTitle}>{t('language')}</Text>

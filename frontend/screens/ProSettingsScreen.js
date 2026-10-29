@@ -1,6 +1,7 @@
 import React from 'react';
 import { SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useLanguage } from '../context/LanguageContext';
+import ThemePicker from '../components/ThemePicker';
 
 const COLORS = {
   background: '#F7F5F1',
@@ -89,6 +90,8 @@ export default function SettingsScreen() {
           <Text style={styles.title}>{t('language')}</Text>
           <Text style={styles.subtitle}>{t('currentLanguage')}: {langLabel(language) || language}</Text>
         </View>
+
+        <ThemePicker language={language} />
 
         <View style={styles.card}>
           <View style={styles.cardHeader}>

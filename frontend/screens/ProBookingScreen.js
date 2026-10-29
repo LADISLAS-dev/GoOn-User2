@@ -4,6 +4,7 @@ import {
   View,
   Text,
   FlatList,
+  ScrollView,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
@@ -26,6 +27,7 @@ const RED = "#EF4444";
 const GREEN = "#10B981";
 const AMBER = "#F59E0B";
 const BG = "#F8F0FF";
+const BEAUTY_ACCENT = '#F47732';
 
 const LOCALE_BY_LANG = {
   fr: "fr-FR",
@@ -87,8 +89,20 @@ const formatMonth = (iso, locale = "fr-FR") => {
   return d.toLocaleDateString(locale, { month: "short" }).replace(".", "").toUpperCase();
 };
 
+const getLocalDayKey = (value) => {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
+
+const formatBeautyDay = (value, locale) => {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  return date.toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short' });
+};
+
 // ─── Carte rendez-vous ────────────────────────────────────────────────────────
-function AppointmentCard({ item, currentUserId, onPress, onCancel, onDelete, locale, t }) {
+function AppointmentCard({ item, currentUserId, onPress, onCancel, onDelete, locale, t, isBeautyCompany = false }) {
   const statusStyles = getStatusStyles(t);
   const status = statusStyles[item.status] || statusStyles.pending;
   const senderId = String(item?.senderId?._id || item?.senderId || "");
@@ -103,13 +117,13 @@ function AppointmentCard({ item, currentUserId, onPress, onCancel, onDelete, loc
   const detailsText = item.notes || item.note || item.message || "";
 
   return (
-    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.8}>
-      <View style={styles.cardAccent} />
+    <TouchableOpacity style={[styles.card, isBeautyCompany && styles.beautyCard]} onPress={onPress} activeOpacity={0.8}>
+      <View style={[styles.cardAccent, isBeautyCompany && styles.beautyCardAccent]} />
       <View style={styles.cardMain}>
         <View style={styles.cardTopRow}>
-          <View style={styles.cardDateBox}>
-            <Text style={styles.cardDateDay}>{formatDay(item.date, locale)}</Text>
-            <Text style={styles.cardDateMonth}>{formatMonth(item.date, locale)}</Text>
+          <View style={[styles.cardDateBox, isBeautyCompany && styles.beautyDateBox]}>
+            <Text style={[styles.cardDateDay, isBeautyCompany && styles.beautyDateText]}>{formatDay(item.date, locale)}</Text>
+            <Text style={[styles.cardDateMonth, isBeautyCompany && styles.beautyDateText]}>{formatMonth(item.date, locale)}</Text>
           </View>
 
           <View style={styles.cardBody}>
@@ -165,9 +179,19 @@ export default function BookingScreen(props) {
 
   const [company, setCompany]         = useState(null);
   const [appointments, setAppointments] = useState([]);
+  const [selectedBeautyDay, setSelectedBeautyDay] = useState('');
   const [loading, setLoading]         = useState(true);
   const [refreshing, setRefreshing]   = useState(false);
   const [activeFilter, setActiveFilter] = useState("all");
+  const companyCategoryIds = [
+    ...(Array.isArray(company?.categoryIds) ? company.categoryIds : []),
+    company?.categoryId,
+    company?.businessTypeId,
+  ].map((id) => String(id || '').trim());
+  const isBeautyCompany = companyCategoryIds.includes('3');
+  const beautyCopy = activeLanguage === 'fr'
+    ? { eyebrow: 'BEAUTÉ & MODE', title: 'Agenda beauté', appointments: 'Rendez-vous', allDays: 'Tous les jours', noAppointments: 'Aucun rendez-vous à cette date.' }
+    : { eyebrow: 'BEAUTY & FASHION', title: 'Beauty calendar', appointments: 'Appointments', allDays: 'All days', noAppointments: 'No appointments on this date.' };
   const filters = useMemo(
     () => [
       { key: "all", label: t('total') },
@@ -298,6 +322,23 @@ export default function BookingScreen(props) {
     }
   }, [appointments, activeFilter]);
 
+  const beautyDayChoices = useMemo(() => {
+    const dates = new Map();
+    appointments.forEach((appointment) => {
+      const key = getLocalDayKey(appointment.date);
+      if (key && !dates.has(key)) dates.set(key, appointment.date);
+    });
+    return [...dates.entries()]
+      .sort((left, right) => new Date(left[1]) - new Date(right[1]))
+      .map(([key, date]) => ({ key, date, label: formatBeautyDay(date, locale) }));
+  }, [appointments, locale]);
+
+  const beautyFilteredAppointments = useMemo(() => (
+    selectedBeautyDay
+      ? filteredAppointments.filter((appointment) => getLocalDayKey(appointment.date) === selectedBeautyDay)
+      : filteredAppointments
+  ), [filteredAppointments, selectedBeautyDay]);
+
   const goToCreate = (service) => {
     if (!companyId) return;
     navigation.navigate("CreateAppointment", {
@@ -331,8 +372,8 @@ export default function BookingScreen(props) {
   }
 
   return (
-    <SafeAreaView style={styles.root} edges={["top"]}>
-      <View style={styles.headerHero}>
+    <SafeAreaView style={[styles.root, isBeautyCompany && styles.beautyRoot]} edges={["top"]}>
+      <View style={[styles.headerHero, isBeautyCompany && styles.beautyHeaderHero]}>
         <View style={styles.heroCircleOne} />
         <View style={styles.heroCircleTwo} />
         <View style={styles.headerRow}>
@@ -347,18 +388,18 @@ export default function BookingScreen(props) {
               </View>
             )}
             <View style={{ flex: 1 }}>
-              <Text style={styles.headerEyebrow}>{t('appointmentsTitle', 'Rendez-vous')}</Text>
-              <Text style={styles.headerTitle}>{t('bookingTitle')}</Text>
+              <Text style={styles.headerEyebrow}>{isBeautyCompany ? beautyCopy.eyebrow : t('appointmentsTitle', 'Rendez-vous')}</Text>
+              <Text style={styles.headerTitle}>{isBeautyCompany ? beautyCopy.title : t('bookingTitle')}</Text>
               {company?.name && <Text style={styles.headerSub}>{company.name}</Text>}
             </View>
           </View>
 
           <TouchableOpacity
-            style={styles.headerBookingBtn}
+            style={[styles.headerBookingBtn, isBeautyCompany && styles.beautyHeaderBookingBtn]}
             onPress={() => goToCreate()}
             activeOpacity={0.85}
           >
-            <Text style={styles.headerBookingBtnText}>+ {t('reserveService')}</Text>
+            <Text style={[styles.headerBookingBtnText, isBeautyCompany && styles.beautyHeaderBookingBtnText]}>+ {t('reserveService')}</Text>
           </TouchableOpacity>
         </View>
 
@@ -380,7 +421,7 @@ export default function BookingScreen(props) {
 
       {company?.services?.length > 0 && (
         <View style={styles.servicesPicker}>
-          <Text style={styles.servicesPickerLabel}>{t('servicesToBook', 'Services a reserver')}</Text>
+          <Text style={[styles.servicesPickerLabel, isBeautyCompany && styles.beautySectionLabel]}>{isBeautyCompany ? beautyCopy.appointments : t('servicesToBook', 'Services a reserver')}</Text>
           <FlatList
             data={company.services}
             keyExtractor={(item) => item._id}
@@ -402,31 +443,48 @@ export default function BookingScreen(props) {
       )}
 
       <FlatList
-        data={filteredAppointments}
+        data={isBeautyCompany ? beautyFilteredAppointments : filteredAppointments}
         keyExtractor={(item) => item._id}
         contentContainerStyle={styles.list}
         ListHeaderComponent={
-          <View style={styles.filtersWrap}>
-            <FlatList
-              data={filters}
-              horizontal
-              keyExtractor={(item) => item.key}
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ gap: 8 }}
-              renderItem={({ item }) => {
-                const selected = item.key === activeFilter;
-                return (
-                  <TouchableOpacity
-                    style={[styles.filterChip, selected && styles.filterChipActive]}
-                    onPress={() => setActiveFilter(item.key)}
-                  >
-                    <Text style={[styles.filterChipText, selected && styles.filterChipTextActive]}>
-                      {item.label}
-                    </Text>
+          <View>
+            {isBeautyCompany && beautyDayChoices.length ? (
+              <View style={styles.beautyDaysWrap}>
+                <Text style={styles.beautyDayHeading}>{beautyCopy.appointments}</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.beautyDaysRow}>
+                  <TouchableOpacity style={[styles.beautyDayChip, !selectedBeautyDay && styles.beautyDayChipActive]} onPress={() => setSelectedBeautyDay('')}>
+                    <Text style={[styles.beautyDayText, !selectedBeautyDay && styles.beautyDayTextActive]}>{beautyCopy.allDays}</Text>
                   </TouchableOpacity>
-                );
-              }}
-            />
+                  {beautyDayChoices.map((day) => (
+                    <TouchableOpacity key={day.key} style={[styles.beautyDayChip, selectedBeautyDay === day.key && styles.beautyDayChipActive]} onPress={() => setSelectedBeautyDay(day.key)}>
+                      <Text style={[styles.beautyDayText, selectedBeautyDay === day.key && styles.beautyDayTextActive]}>{day.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            ) : null}
+            <View style={styles.filtersWrap}>
+              <FlatList
+                data={filters}
+                horizontal
+                keyExtractor={(item) => item.key}
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 8 }}
+                renderItem={({ item }) => {
+                  const selected = item.key === activeFilter;
+                  return (
+                    <TouchableOpacity
+                      style={[styles.filterChip, isBeautyCompany && styles.beautyFilterChip, selected && (isBeautyCompany ? styles.beautyFilterChipActive : styles.filterChipActive)]}
+                      onPress={() => setActiveFilter(item.key)}
+                    >
+                      <Text style={[styles.filterChipText, isBeautyCompany && styles.beautyFilterChipText, selected && (isBeautyCompany ? styles.beautyFilterChipTextActive : styles.filterChipTextActive)]}>
+                        {item.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                }}
+              />
+            </View>
           </View>
         }
         refreshControl={
@@ -438,6 +496,7 @@ export default function BookingScreen(props) {
             currentUserId={currentUserId}
             locale={locale}
             t={t}
+            isBeautyCompany={isBeautyCompany}
             onPress={() =>
               navigation.navigate("AppointmentDetails", { id: item._id, appointmentId: item._id })
             }
@@ -450,7 +509,9 @@ export default function BookingScreen(props) {
             <Text style={styles.emptyIcon}>📅</Text>
             <Text style={styles.emptyTitle}>{t('noBookings', 'No appointments')}</Text>
             <Text style={styles.emptySub}>
-              {activeFilter === "all"
+              {isBeautyCompany && selectedBeautyDay
+                ? beautyCopy.noAppointments
+                : activeFilter === "all"
                 ? t('noBookingsYet', 'No appointments yet.')
                 : t('noBookingsInFilter', 'No appointments in this filter.')}
             </Text>
@@ -468,6 +529,7 @@ export default function BookingScreen(props) {
 // ─── styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   root:   { flex: 1, backgroundColor: BG },
+  beautyRoot: { backgroundColor: '#F8F3EF' },
   center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32 },
 
   headerHero: {
@@ -480,6 +542,7 @@ const styles = StyleSheet.create({
     backgroundColor: BRAND,
     overflow: "hidden",
   },
+  beautyHeaderHero: { backgroundColor: BEAUTY_ACCENT },
   heroCircleOne: {
     position: "absolute",
     width: 180,
@@ -518,6 +581,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   headerBookingBtnText: { color: BRAND_DARK, fontWeight: "800", fontSize: 11 },
+  beautyHeaderBookingBtn: { backgroundColor: '#FFFFFF' },
+  beautyHeaderBookingBtnText: { color: '#B24A1C' },
 
   statsRow: {
     flexDirection: "row",
@@ -540,6 +605,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase", letterSpacing: 0.4,
     paddingHorizontal: 16, marginBottom: 8,
   },
+  beautySectionLabel: { color: '#B24A1C' },
   serviceChip: {
     backgroundColor: "#fff", borderRadius: 14,
     paddingHorizontal: 16, paddingVertical: 12,
@@ -561,6 +627,17 @@ const styles = StyleSheet.create({
   filterChipActive: {
     backgroundColor: BRAND,
   },
+  beautyDaysWrap: { marginHorizontal: 16, marginTop: 16, marginBottom: 12 },
+  beautyDayHeading: { color: '#211D1B', fontSize: 14, fontWeight: '800', marginBottom: 8 },
+  beautyDaysRow: { gap: 7 },
+  beautyDayChip: { minHeight: 40, justifyContent: 'center', paddingHorizontal: 12, borderRadius: 9, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#EFE5DE' },
+  beautyDayChipActive: { backgroundColor: BEAUTY_ACCENT, borderColor: BEAUTY_ACCENT },
+  beautyDayText: { color: '#857D78', fontSize: 10, fontWeight: '700' },
+  beautyDayTextActive: { color: '#FFFFFF' },
+  beautyFilterChip: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#EFE5DE' },
+  beautyFilterChipActive: { backgroundColor: BEAUTY_ACCENT, borderColor: BEAUTY_ACCENT },
+  beautyFilterChipText: { color: '#857D78' },
+  beautyFilterChipTextActive: { color: '#FFFFFF' },
   filterChipText: {
     color: "#6E5A86",
     fontWeight: "700",
@@ -584,6 +661,10 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
+  beautyCard: { borderColor: '#EFE5DE', borderRadius: 14 },
+  beautyCardAccent: { backgroundColor: BEAUTY_ACCENT },
+  beautyDateBox: { backgroundColor: '#FFF0E6' },
+  beautyDateText: { color: '#B24A1C' },
   cardAccent: {
     width: 6,
     borderTopLeftRadius: 18,

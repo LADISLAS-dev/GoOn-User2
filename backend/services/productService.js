@@ -1,5 +1,24 @@
 const STOCK_REASONS = new Set(['opening', 'restock', 'sale', 'return', 'damage', 'adjustment']);
 const PRODUCT_STATUSES = new Set(['active', 'archived']);
+const PRODUCT_BADGES = new Set(['', 'new', 'limited', 'offer']);
+const PRODUCT_CATALOG_CATEGORY_IDS = new Set(['12', '13', '15', '25', '36']);
+const DISH_TAGS = new Set(['spicy', 'fish', 'vegetarian', 'vegan', 'meat', 'sweet']);
+const DISH_ALLERGENS = new Set(['gluten', 'dairy', 'nuts', 'eggs', 'shellfish', 'fish', 'soy', 'sesame']);
+
+function normalizeChoiceList(value, allowed, label) {
+  if (!Array.isArray(value)) throw new Error(`${label} doit être une liste.`);
+  const list = [...new Set(value.map((entry) => String(entry || '').trim().toLowerCase()))];
+  if (list.some((entry) => !allowed.has(entry))) throw new Error(`${label} contient une valeur invalide.`);
+  return list;
+}
+
+function lineUnitPriceMinor(product, quantity) {
+  let unit = Math.round(((product.priceMinor || 0) * (100 - (product.discountPercent || 0))) / 100);
+  if (product.bulkMinQuantity > 0 && quantity >= product.bulkMinQuantity) {
+    unit = Math.round((unit * (100 - (product.bulkDiscountPercent || 0))) / 100);
+  }
+  return unit;
+}
 const MAX_STOCK_MOVEMENT = 1000000;
 
 function normalizeProductInput(input = {}, { partial = false } = {}) {
@@ -61,6 +80,11 @@ function normalizeProductInput(input = {}, { partial = false } = {}) {
     normalized.isAvailable = input.isAvailable;
   }
 
+  if (has('isFeatured')) {
+    if (typeof input.isFeatured !== 'boolean') throw new Error('La mise en avant doit être vraie ou fausse.');
+    normalized.isFeatured = input.isFeatured;
+  }
+
   if (has('barcode')) {
     normalized.barcode = String(input.barcode || '').trim();
     if (normalized.barcode.length > 64) throw new Error('Le code-barres dépasse 64 caractères.');
@@ -83,6 +107,23 @@ function normalizeProductInput(input = {}, { partial = false } = {}) {
     normalized.status = String(input.status || '').trim().toLowerCase();
     if (!PRODUCT_STATUSES.has(normalized.status)) throw new Error('Le statut produit est invalide.');
   }
+
+  if (has('badge')) {
+    normalized.badge = String(input.badge || '').trim().toLowerCase();
+    if (!PRODUCT_BADGES.has(normalized.badge)) throw new Error('Le badge produit est invalide.');
+  }
+
+  [['discountPercent', 90], ['prepTimeMinutes', 600], ['calories', 10000], ['bulkMinQuantity', 100], ['bulkDiscountPercent', 90]].forEach(([key, max]) => {
+    if (!has(key)) return;
+    const value = Number(input[key] || 0);
+    if (!Number.isSafeInteger(value) || value < 0 || value > max) {
+      throw new Error(`Le champ ${key} doit être un entier entre 0 et ${max}.`);
+    }
+    normalized[key] = value;
+  });
+
+  if (has('tags')) normalized.tags = normalizeChoiceList(input.tags, DISH_TAGS, 'Les tags');
+  if (has('allergens')) normalized.allergens = normalizeChoiceList(input.allergens, DISH_ALLERGENS, 'Les allergènes');
 
   return normalized;
 }
@@ -138,10 +179,29 @@ function canDisplayPublicRestaurantMenu(company) {
   return isRestaurant && isPublic;
 }
 
+function isProductCatalogCategory(company) {
+  if (!company) return false;
+  const categoryIds = [
+    ...(Array.isArray(company.categoryIds) ? company.categoryIds : []),
+    company.categoryId,
+    company.businessTypeId,
+  ].map((id) => String(id || '').trim());
+  return !categoryIds.includes('2') && categoryIds.some((id) => PRODUCT_CATALOG_CATEGORY_IDS.has(id));
+}
+
+function canDisplayPublicRetailCatalog(company) {
+  if (!isProductCatalogCategory(company)) return false;
+  const isPublic = company.setupStatus === 'ready' || Boolean(company.profileValidatedAt);
+  return isPublic;
+}
+
 module.exports = {
   MAX_STOCK_MOVEMENT,
   buildProductFilter,
+  canDisplayPublicRetailCatalog,
   canDisplayPublicRestaurantMenu,
+  isProductCatalogCategory,
+  lineUnitPriceMinor,
   normalizeProductInput,
   normalizeStockMovement,
 };

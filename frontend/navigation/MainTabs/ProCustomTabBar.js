@@ -33,6 +33,7 @@ export default function CustomTabBar({
   defaultCurrentUserId,
   moduleConfigs,
   isRestaurantCompany = false,
+  isBeautyCompany = false,
 }) {
   const insets = useSafeAreaInsets();
   const { notifications = [] } = useNotifications();
@@ -131,7 +132,7 @@ export default function CustomTabBar({
 
               if (companyId) {
                 navigation.navigate("CompanyHome", {
-                  screen: isRestaurantCompany ? "RestaurantDashboard" : "CompanyOverview",
+                  screen: isRestaurantCompany ? "RestaurantDashboard" : isBeautyCompany ? "BeautyDashboard" : "CompanyOverview",
                   params: {
                     companyId,
                     ...(currentUserId ? { currentUserId } : {}),

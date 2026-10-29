@@ -10,7 +10,7 @@ const {
 
 exports.createAppointment = async (req, res) => {
   try {
-    const { companyId, senderId, receiverId, message, date } = req.body;
+    const { companyId, senderId, receiverId, message, date, serviceSelection } = req.body;
 
     // ================= VALIDATION =================
     if (!companyId || !senderId || !receiverId || !message) {
@@ -44,6 +44,7 @@ exports.createAppointment = async (req, res) => {
       receiverId,
       message: message.trim(),
       date: date || null,
+      ...(serviceSelection ? { serviceSelection } : {}),
       status: 'pending',
       type: 'appointment', // 🔥 FIX IMPORTANT
     });

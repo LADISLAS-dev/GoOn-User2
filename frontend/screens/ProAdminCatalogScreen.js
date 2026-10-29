@@ -307,6 +307,7 @@ export default function ProAdminCatalogScreen() {
         <Text style={styles.paymentCompany}>{item.companyId?.name || copy.paymentCompany}</Text>
         <Text style={styles.paymentMeta}>
           {copy.paymentOrder}: {order.orderNumber || '—'}
+          {order.fulfillmentType === 'takeaway' ? ' · À emporter / Take away' : ''}
           {order.tableNumber ? ` · Table ${order.tableNumber}` : ''}
           {order.customer?.name ? ` · ${order.customer.name}` : ''}
         </Text>

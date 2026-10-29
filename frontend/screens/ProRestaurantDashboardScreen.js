@@ -1,5 +1,6 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
+  AppState,
   Alert,
   ActivityIndicator,
   Linking,
@@ -79,8 +80,9 @@ export default function ProRestaurantDashboardScreen({ companyId, onboardingFlow
         setup: 'Terminez la vitrine de votre restaurant',
         setupDetail: 'Ajoutez vos photos, horaires et spécialités pour accueillir vos clients.',
         editProfile: 'Configurer ma vitrine', loading: 'Actualisation…',
-        payments: 'Encaissements', paymentAccountsDetail: 'Connectez vos comptes pour recevoir les paiements directement.',
-        stripe: 'Stripe · Visa', paypal: 'PayPal', connect: 'Connecter', finishSetup: 'Terminer',
+        payments: 'Encaissements', paymentAccountsDetail: 'Connectez votre compte Stripe existant. Gérez la banque ou la carte de versement dans Stripe. Commission GoOn : 3 % + 0,30 $ par commande Stripe.',
+        stripe: 'Compte Stripe', paypal: 'PayPal', connect: 'Connecter', connectStripe: 'Connecter Stripe', finishSetup: 'Terminer',
+        debitCard: 'Carte de débit', bankAccount: 'Compte bancaire',
         continue: 'Continuer', cancel: 'Annuler', paypalConsentTitle: 'Autoriser PayPal',
         paypalConsentBody: 'PayPal demande votre accord pour partager les informations nécessaires à la réception des paiements par GoOn.',
         connected: 'Connecté', pending: 'Configuration en cours', notConnected: 'Non connecté',
@@ -96,8 +98,9 @@ export default function ProRestaurantDashboardScreen({ companyId, onboardingFlow
         setup: 'Finish your restaurant storefront',
         setupDetail: 'Add photos, opening hours and specialties to welcome customers.',
         editProfile: 'Set up storefront', loading: 'Refreshing…',
-        payments: 'Payments', paymentAccountsDetail: 'Connect your accounts to receive payments directly.',
-        stripe: 'Stripe · Visa', paypal: 'PayPal', connect: 'Connect', finishSetup: 'Finish setup',
+        payments: 'Payments', paymentAccountsDetail: 'Connect your existing Stripe account. Manage your payout bank or card in Stripe. GoOn fee: 3% + $0.30 per Stripe order.',
+        stripe: 'Stripe account', paypal: 'PayPal', connect: 'Connect', connectStripe: 'Connect Stripe', finishSetup: 'Finish setup',
+        debitCard: 'Debit card', bankAccount: 'Bank account',
         continue: 'Continue', cancel: 'Cancel', paypalConsentTitle: 'Authorize PayPal',
         paypalConsentBody: 'PayPal needs your consent to share the information GoOn requires to receive payments.',
         connected: 'Connected', pending: 'Setup in progress', notConnected: 'Not connected',
@@ -146,6 +149,14 @@ export default function ProRestaurantDashboardScreen({ companyId, onboardingFlow
     loadDashboard();
   }, [loadDashboard]));
 
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active' && navigation.isFocused()) {
+        loadDashboard();
+      }
+    });
+    return () => subscription.remove();
+  }, [loadDashboard, navigation]);
   const enabledModules = new Set(
     (Array.isArray(moduleConfigs) ? moduleConfigs : [])
       .filter((module) => module.enabled !== false)
@@ -175,13 +186,22 @@ export default function ProRestaurantDashboardScreen({ companyId, onboardingFlow
       setConnectingProvider('');
     }
   };
-  const stripeConnected = Boolean(paymentAccounts?.stripe?.chargesEnabled && paymentAccounts?.stripe?.payoutsEnabled);
+  const payoutDestination = paymentAccounts?.stripe?.payoutDestination;
+  const requiresPayoutDestinationMetadata = paymentAccounts?.stripe?.accountType === 'custom';
+  const stripeConnected = Boolean(
+    paymentAccounts?.stripe?.chargesEnabled
+    && paymentAccounts?.stripe?.payoutsEnabled
+    && (!requiresPayoutDestinationMetadata || payoutDestination?.last4)
+  );
   const stripeLabel = stripeConnected
     ? copy.connected
     : paymentAccounts?.stripe?.connected ? copy.finishSetup : copy.notConnected;
   const paypalLabel = paymentAccounts?.paypal?.connected
     ? copy.connected
     : paymentAccounts?.paypal?.pending ? copy.pending : copy.notConnected;
+  const payoutDestinationLabel = payoutDestination
+    ? `${payoutDestination.type === 'card' ? copy.debitCard : copy.bankAccount}${payoutDestination.brand ? ` · ${payoutDestination.brand}` : ''} ····${payoutDestination.last4}`
+    : '';
   const openStorefrontSettings = () => navigation.navigate('CompanyOverview', {
     companyId,
     onboardingFlow: Boolean(onboardingFlow || !company?.profileValidatedAt),
@@ -256,29 +276,35 @@ export default function ProRestaurantDashboardScreen({ companyId, onboardingFlow
             <View style={styles.paymentPanel}>
               <Text style={styles.paymentPanelDetail}>{copy.paymentAccountsDetail}</Text>
               {[
-                { key: 'stripe', label: copy.stripe, status: stripeLabel },
+                { key: 'stripe', label: copy.stripe, status: stripeLabel, detail: payoutDestinationLabel },
                 { key: 'paypal', label: copy.paypal, status: paypalLabel },
               ].map((provider) => (
-                <View key={provider.key} style={styles.paymentProviderRow}>
+                <TouchableOpacity
+                  key={provider.key}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${provider.label}: ${provider.status}`}
+                  activeOpacity={0.75}
+                  disabled={Boolean(connectingProvider) || provider.status === copy.connected}
+                  onPress={() => connectPaymentProvider(provider.key)}
+                  style={styles.paymentProviderRow}
+                >
                   <View style={styles.paymentProviderCopy}>
                     <Text style={styles.paymentProviderName}>{provider.label}</Text>
                     <Text style={styles.paymentProviderStatus}>{provider.status}</Text>
+                    {provider.detail ? <Text style={styles.paymentProviderDetail}>{provider.detail}</Text> : null}
                   </View>
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    disabled={Boolean(connectingProvider) || provider.status === copy.connected}
-                    onPress={() => connectPaymentProvider(provider.key)}
-                    style={[styles.paymentConnectButton, (Boolean(connectingProvider) || provider.status === copy.connected) && styles.paymentConnectButtonDisabled]}
-                  >
+                  <View style={[styles.paymentConnectButton, (Boolean(connectingProvider) || provider.status === copy.connected) && styles.paymentConnectButtonDisabled]}>
                     <Text style={styles.paymentConnectText}>
                       {connectingProvider === provider.key
                         ? '…'
                         : provider.status === copy.connected
                           ? copy.connected
-                          : provider.status === copy.notConnected ? copy.connect : copy.finishSetup}
+                            : provider.key === 'stripe'
+                              ? copy.connectStripe
+                              : provider.status === copy.notConnected ? copy.connect : copy.finishSetup}
                     </Text>
-                  </TouchableOpacity>
-                </View>
+                  </View>
+                </TouchableOpacity>
               ))}
               {paymentConnectionError ? <Text accessibilityRole="alert" style={styles.paymentConnectionError}>{paymentConnectionError}</Text> : null}
             </View>
@@ -380,6 +406,7 @@ const styles = StyleSheet.create({
   paymentProviderCopy: { flex: 1 },
   paymentProviderName: { color: COLORS.text, fontSize: 12, fontWeight: '700' },
   paymentProviderStatus: { color: COLORS.muted, fontSize: 10, marginTop: 3 },
+    paymentProviderDetail: { color: COLORS.green, fontSize: 10, marginTop: 3 },
   paymentConnectButton: { minHeight: 34, justifyContent: 'center', paddingHorizontal: 11, backgroundColor: COLORS.violet, borderRadius: 7 },
   paymentConnectButtonDisabled: { opacity: 0.6 },
   paymentConnectText: { color: '#FFFFFF', fontSize: 10, fontWeight: '700' },

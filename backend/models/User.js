@@ -40,6 +40,9 @@ const userSchema = new mongoose.Schema({
   avatar: { type: String, default: '' },
   bio: { type: String, default: '' },
   language: { type: String, default: 'en' },
+  stripeCustomerId: { type: String, default: '', select: false },
+  stripeCardConsentAt: { type: Date, default: null, select: false },
+  stripeCardConsentVersion: { type: String, default: '', select: false },
   lastActiveAt: { type: Date, default: null },
   blockedUsers: {
     type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],

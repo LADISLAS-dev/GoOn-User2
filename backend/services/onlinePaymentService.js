@@ -3,7 +3,7 @@ const SalesOrder = require('../models/SalesOrder');
 const SalesOrderPayment = require('../models/SalesOrderPayment');
 const { getSalesOrderPaymentStatus } = require('./salesOrderService');
 const { logAuditEvent } = require('./auditLogService');
-const { getPaypalBaseUrl, paypalAccessToken } = require('./paymentAccountService');
+const { getPaypalBaseUrl, getStripeMode, paypalAccessToken } = require('./paymentAccountService');
 
 function fail(status, message) {
   return Object.assign(new Error(message), { status });
@@ -23,13 +23,30 @@ function getOnlinePaymentApiBaseUrl() {
 
 function getCompanyPaymentAccount(company, provider) {
   const account = company.paymentAccounts?.[provider];
-  if (provider === 'stripe' && (!account?.accountId || !account.chargesEnabled || !account.payoutsEnabled)) {
+  if (provider === 'stripe' && (!account?.accountId || account.mode !== getStripeMode() || !account.chargesEnabled || !account.payoutsEnabled)) {
     throw fail(409, 'Le compte Stripe du restaurant doit terminer son activation.');
   }
   if (provider === 'paypal' && (!account?.merchantId || account.onboardingStatus !== 'connected')) {
     throw fail(409, 'Le compte PayPal du restaurant doit terminer son activation.');
   }
   return account;
+}
+
+function calculateStripeApplicationFee(amountMinor) {
+  if (!Number.isSafeInteger(amountMinor) || amountMinor < 1) {
+    throw fail(400, 'Le montant Stripe est invalide.');
+  }
+  return Math.min(amountMinor, Math.round(amountMinor * 0.03) + 30);
+}
+
+function getStripeAccountIdForOrder(order, company) {
+  if (order?.stripeAccountId) return order.stripeAccountId;
+  const stripeStatus = company.paymentAccounts?.stripe || {};
+  const legacyMode = order?.stripeMode || (stripeStatus.legacyTestAccountId ? 'test' : 'live');
+  const legacyAccountId = legacyMode === 'live'
+    ? stripeStatus.legacyLiveAccountId
+    : stripeStatus.legacyTestAccountId;
+  return legacyAccountId || stripeStatus.accountId || '';
 }
 
 function assertOnlineOrder(order) {
@@ -66,6 +83,7 @@ function getPublicPaymentOptions(company) {
       && process.env.STRIPE_SECRET_KEY
       && process.env.STRIPE_CONNECT_WEBHOOK_SECRET
       && company.paymentAccounts?.stripe?.accountId
+      && company.paymentAccounts?.stripe?.mode === getStripeMode()
       && company.paymentAccounts?.stripe?.chargesEnabled
       && company.paymentAccounts?.stripe?.payoutsEnabled
     ),
@@ -109,6 +127,10 @@ async function paypalRequest(path, { method = 'GET', body, merchantId, requestId
 async function createStripeCheckoutSession(order, company) {
   assertOnlineOrder(order);
   const account = getCompanyPaymentAccount(company, 'stripe');
+  const applicationFeeAmount = calculateStripeApplicationFee(order.totalMinor);
+  order.stripeAccountId = account.accountId;
+  order.stripeMode = getStripeMode();
+  order.stripeApplicationFeeMinor = applicationFeeAmount;
   const apiBase = getOnlinePaymentApiBaseUrl();
   const session = await getStripe().checkout.sessions.create({
     mode: 'payment',
@@ -116,13 +138,14 @@ async function createStripeCheckoutSession(order, company) {
     line_items: [{
       price_data: {
         currency: 'usd',
-        product_data: { name: `Restaurant order ${order.orderNumber}` },
+        product_data: { name: `${order.channel === 'retail_app' ? 'Retail order' : 'Restaurant order'} ${order.orderNumber}` },
         unit_amount: order.totalMinor,
       },
       quantity: 1,
     }],
     payment_intent_data: {
       capture_method: 'manual',
+      application_fee_amount: applicationFeeAmount,
       metadata: { salesOrderId: String(order._id), companyId: String(company._id) },
     },
     metadata: { salesOrderId: String(order._id), companyId: String(company._id) },
@@ -182,9 +205,10 @@ async function authorizePaypalOrder(order, company, paypalOrderId) {
 
 async function verifyStripeCheckoutSession(order, company, sessionId) {
   if (String(order.stripeCheckoutSessionId) !== String(sessionId)) throw fail(400, 'La session Stripe ne correspond pas à cette commande.');
-  const account = getCompanyPaymentAccount(company, 'stripe');
+  const stripeAccountId = getStripeAccountIdForOrder(order, company);
+  if (!stripeAccountId) throw fail(409, 'Le compte Stripe de cette commande est introuvable.');
   const stripe = getStripe();
-  const session = await stripe.checkout.sessions.retrieve(sessionId, {}, { stripeAccount: account.accountId });
+  const session = await stripe.checkout.sessions.retrieve(sessionId, {}, { stripeAccount: stripeAccountId });
   if (session.mode !== 'payment'
     || String(session.metadata?.salesOrderId) !== String(order._id)
     || session.amount_total !== order.totalMinor
@@ -193,20 +217,67 @@ async function verifyStripeCheckoutSession(order, company, sessionId) {
   }
   const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id;
   if (!paymentIntentId) throw fail(402, 'Stripe n’a pas créé de paiement.');
-  const intent = await stripe.paymentIntents.retrieve(paymentIntentId, {}, { stripeAccount: account.accountId });
+  const intent = await stripe.paymentIntents.retrieve(paymentIntentId, {}, { stripeAccount: stripeAccountId });
   if (intent.status !== 'requires_capture' || intent.amount !== order.totalMinor || intent.currency.toUpperCase() !== order.currency) {
     throw fail(402, 'Le paiement Stripe n’est pas autorisé.');
   }
   return paymentIntentId;
 }
 
+async function authorizeSavedStripeCard(order, company, user, paymentMethodId) {
+  assertOnlineOrder(order);
+  if (order.paymentMethod !== 'stripe') throw fail(400, 'Une carte Stripe est requise.');
+  if (!user?.stripeCustomerId || !user?.stripeCardConsentAt) {
+    throw fail(403, 'Enregistre une carte et accepte son utilisation future dans ton profil.');
+  }
+  const account = getCompanyPaymentAccount(company, 'stripe');
+  const stripe = getStripe();
+  const applicationFeeAmount = calculateStripeApplicationFee(order.totalMinor);
+  const originalMethod = await stripe.paymentMethods.retrieve(String(paymentMethodId));
+  const originalCustomerId = typeof originalMethod.customer === 'string'
+    ? originalMethod.customer
+    : originalMethod.customer?.id;
+  if (originalMethod.type !== 'card' || originalCustomerId !== String(user.stripeCustomerId)) {
+    throw fail(404, 'Cette carte n’appartient pas à votre compte.');
+  }
+
+  const clonedMethod = await stripe.paymentMethods.create({
+    customer: user.stripeCustomerId,
+    payment_method: originalMethod.id,
+  }, {
+    stripeAccount: account.accountId,
+    idempotencyKey: `goon_clone_${order._id}`,
+  });
+  const paymentIntent = await stripe.paymentIntents.create({
+    amount: order.totalMinor,
+    currency: 'usd',
+    payment_method: clonedMethod.id,
+    confirm: true,
+    off_session: true,
+    capture_method: 'manual',
+    application_fee_amount: applicationFeeAmount,
+    metadata: { salesOrderId: String(order._id), companyId: String(company._id), goonUserId: String(user._id) },
+  }, {
+    stripeAccount: account.accountId,
+    idempotencyKey: `goon_saved_card_${order._id}`,
+  });
+  if (paymentIntent.status !== 'requires_capture' || paymentIntent.amount !== order.totalMinor) {
+    throw fail(402, 'La carte n’a pas pu autoriser le paiement. Réessaie avec un paiement sécurisé.');
+  }
+  order.stripeAccountId = account.accountId;
+  order.stripeMode = getStripeMode();
+  order.stripeApplicationFeeMinor = applicationFeeAmount;
+  return paymentIntent.id;
+}
+
 async function captureOnlinePayment(order, company) {
   assertOnlineOrder(order);
   if (order.paymentStatus !== 'authorized') throw fail(409, 'La commande ne possède pas de paiement autorisé à capturer.');
   if (order.paymentMethod === 'stripe') {
-    const account = getCompanyPaymentAccount(company, 'stripe');
+    const stripeAccountId = getStripeAccountIdForOrder(order, company);
+    if (!stripeAccountId) throw fail(409, 'Le compte Stripe de cette commande est introuvable.');
     const intent = await getStripe().paymentIntents.capture(order.stripePaymentIntentId, {}, {
-      stripeAccount: account.accountId,
+      stripeAccount: stripeAccountId,
       idempotencyKey: `goon_capture_${order._id}`,
     });
     if (intent.status !== 'succeeded') throw fail(402, 'Stripe n’a pas capturé le paiement.');
@@ -227,9 +298,10 @@ async function captureOnlinePayment(order, company) {
 async function voidOnlinePayment(order, company) {
   if (!['stripe', 'paypal'].includes(order.paymentMethod) || order.paymentStatus !== 'authorized') return;
   if (order.paymentMethod === 'stripe') {
-    const account = getCompanyPaymentAccount(company, 'stripe');
+    const stripeAccountId = getStripeAccountIdForOrder(order, company);
+    if (!stripeAccountId) throw fail(409, 'Le compte Stripe de cette commande est introuvable.');
     const intent = await getStripe().paymentIntents.cancel(order.stripePaymentIntentId, {}, {
-      stripeAccount: account.accountId,
+      stripeAccount: stripeAccountId,
       idempotencyKey: `goon_void_${order._id}`,
     });
     if (intent.status !== 'canceled') throw fail(502, 'Stripe n’a pas libéré l’autorisation.');
@@ -302,10 +374,13 @@ async function recordCapturedPayment({ orderId, companyId, provider, transaction
 module.exports = {
   assertOnlinePaymentReady,
   authorizePaypalOrder,
+  authorizeSavedStripeCard,
+  calculateStripeApplicationFee,
   captureOnlinePayment,
   createPaypalOrder,
   createStripeCheckoutSession,
   getPublicPaymentOptions,
+  getStripeAccountIdForOrder,
   recordCapturedPayment,
   verifyStripeCheckoutSession,
   voidOnlinePayment,

@@ -5,6 +5,7 @@ const InventoryMovement = require('../models/InventoryMovement');
 const Company = require('../models/company');
 const Invoice = require('../models/Invoice');
 const Customer = require('../models/Customer');
+const User = require('../models/User');
 const Product = require('../models/Product');
 const SalesOrder = require('../models/SalesOrder');
 const SalesOrderPayment = require('../models/SalesOrderPayment');
@@ -13,16 +14,22 @@ const { resolveCompanyAccess } = require('../services/rbacService');
 const { logAuditEvent } = require('../services/auditLogService');
 const { normalizePagination } = require('../services/customerService');
 const { buildInvoiceInputFromSalesOrder, normalizeManualPayment } = require('../services/invoiceService');
-const { canDisplayPublicRestaurantMenu } = require('../services/productService');
+const { canDisplayPublicRetailCatalog, canDisplayPublicRestaurantMenu, isProductCatalogCategory, lineUnitPriceMinor } = require('../services/productService');
+const { convertMinorAmount, getExchangeRates } = require('../services/exchangeRateService');
+const { distanceBetweenCoordinatesKm, findDeliveryZone } = require('../services/deliveryService');
+const { notifyOrderStatusChange } = require('../services/orderNotificationService');
+const { toAbsoluteMediaUrl } = require('../utils/mediaUrl');
 const {
   calculateRestaurantOrderTotals,
   canTransitionSalesOrder,
   getSalesOrderPaymentStatus,
+  normalizeRetailCheckoutInput,
   normalizeRestaurantCheckoutInput,
   normalizeSalesOrderInput,
 } = require('../services/salesOrderService');
 const {
   assertOnlinePaymentReady,
+  authorizeSavedStripeCard,
   captureOnlinePayment,
   createPaypalOrder,
   createStripeCheckoutSession,
@@ -34,6 +41,11 @@ const router = express.Router();
 const PUBLIC_ORDER_WINDOW_MS = 10 * 60 * 1000;
 const PUBLIC_ORDER_MAX_REQUESTS = 6;
 const publicOrderAttempts = new Map();
+
+function optionalAuthMiddleware(req, res, next) {
+  if (!req.headers.authorization) return next();
+  return authMiddleware(req, res, next);
+}
 
 function allowPublicRestaurantOrder(req, companyId) {
   const now = Date.now();
@@ -56,7 +68,7 @@ function allowPublicRestaurantOrder(req, companyId) {
   return true;
 }
 
-router.post('/public/company/:companyId/checkout', async (req, res) => {
+router.post('/public/company/:companyId/checkout', optionalAuthMiddleware, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.companyId)) {
       return res.status(400).json({ error: 'Identifiant d’entreprise invalide.' });
@@ -80,6 +92,19 @@ router.post('/public/company/:companyId/checkout', async (req, res) => {
     if (input.paymentMethod !== 'pay_at_venue') {
       assertOnlinePaymentReady(input.paymentMethod, input.currency, company);
     }
+    const savedPaymentMethodId = String(req.body?.savedPaymentMethodId || '').trim();
+    let authenticatedUser = null;
+    if (savedPaymentMethodId) {
+      if (input.paymentMethod !== 'stripe') {
+        return res.status(400).json({ error: 'Une carte enregistrée nécessite Stripe.' });
+      }
+      if (!req.user?.uid) return res.status(401).json({ error: 'Connecte-toi pour utiliser une carte enregistrée.' });
+      authenticatedUser = await User.findOne({ firebaseUid: req.user.uid })
+        .select('_id firebaseUid name email +stripeCustomerId +stripeCardConsentAt');
+      if (!authenticatedUser?.stripeCustomerId || !authenticatedUser?.stripeCardConsentAt) {
+        return res.status(403).json({ error: 'Enregistre une carte et accepte son utilisation future dans ton profil.' });
+      }
+    }
     const productIds = input.lines.map((line) => line.productId);
     if (productIds.some((id) => !mongoose.Types.ObjectId.isValid(id))) {
       return res.status(400).json({ error: 'Identifiant article invalide.' });
@@ -89,19 +114,28 @@ router.post('/public/company/:companyId/checkout', async (req, res) => {
       companyId: company._id,
       status: 'active',
       isAvailable: { $ne: false },
-    }).select('_id name sku priceMinor currency');
+    }).select('_id name sku priceMinor currency discountPercent bulkMinQuantity bulkDiscountPercent');
     if (products.length !== productIds.length) {
       return res.status(409).json({ error: 'Un ou plusieurs articles ne sont plus disponibles.' });
     }
 
     const productsById = new Map(products.map((product) => [String(product._id), product]));
+    const hasMixedCurrencies = products.some((product) => product.currency !== input.currency);
+    if (hasMixedCurrencies && input.paymentMethod !== 'pay_at_venue') {
+      return res.status(400).json({ error: 'Le paiement dans l’app nécessite des articles dans une seule devise.' });
+    }
+    const { rates } = hasMixedCurrencies ? await getExchangeRates() : { rates: null };
     let subtotalMinor = 0;
     const lines = input.lines.map((line) => {
       const product = productsById.get(line.productId);
+      let unitPriceMinor = lineUnitPriceMinor(product, line.quantity);
       if (product.currency !== input.currency) {
-        throw Object.assign(new Error('Tous les articles doivent utiliser la même devise.'), { status: 400 });
+        unitPriceMinor = convertMinorAmount(unitPriceMinor, product.currency, input.currency, rates);
+        if (unitPriceMinor === null) {
+          throw Object.assign(new Error('Conversion de devise indisponible pour cet article.'), { status: 400 });
+        }
       }
-      const lineTotalMinor = line.quantity * product.priceMinor;
+      const lineTotalMinor = line.quantity * unitPriceMinor;
       if (!Number.isSafeInteger(lineTotalMinor) || !Number.isSafeInteger(subtotalMinor + lineTotalMinor)) {
         throw Object.assign(new Error('Le total de la commande est trop élevé.'), { status: 400 });
       }
@@ -111,20 +145,24 @@ router.post('/public/company/:companyId/checkout', async (req, res) => {
         productName: product.name,
         sku: product.sku,
         quantity: line.quantity,
-        unitPriceMinor: product.priceMinor,
+        unitPriceMinor,
         lineTotalMinor,
+        note: line.note,
       };
     });
     const { tipMinor, totalMinor } = calculateRestaurantOrderTotals(subtotalMinor, input.tipRateBps);
+    const orderUser = authenticatedUser
+      || (req.user?.uid ? await User.findOne({ firebaseUid: req.user.uid }).select('_id') : null);
     const orderNumber = `SO-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
     const order = await SalesOrder.create({
       companyId: company._id,
-      createdBy: null,
-      updatedBy: null,
+      createdBy: orderUser?._id || null,
+      updatedBy: orderUser?._id || null,
       orderNumber,
       status: 'draft',
       channel: 'restaurant_app',
       tableNumber: input.tableNumber,
+      fulfillmentType: input.fulfillmentType,
       tipRateBps: input.tipRateBps,
       tipMinor,
       paymentMethod: input.paymentMethod,
@@ -137,7 +175,15 @@ router.post('/public/company/:companyId/checkout', async (req, res) => {
     let checkoutUrl = '';
     if (input.paymentMethod !== 'pay_at_venue') {
       try {
-        if (input.paymentMethod === 'stripe') {
+        if (input.paymentMethod === 'stripe' && savedPaymentMethodId) {
+          order.stripePaymentIntentId = await authorizeSavedStripeCard(
+            order,
+            company,
+            authenticatedUser,
+            savedPaymentMethodId
+          );
+          order.paymentStatus = 'authorized';
+        } else if (input.paymentMethod === 'stripe') {
           const checkout = await createStripeCheckoutSession(order, company);
           order.stripeCheckoutSessionId = checkout.stripeCheckoutSessionId;
           order.stripePaymentIntentId = checkout.stripePaymentIntentId;
@@ -156,8 +202,8 @@ router.post('/public/company/:companyId/checkout', async (req, res) => {
     }
     await logAuditEvent(req, {
       companyId: company._id,
-      actorId: null,
-      actorType: 'guest',
+      actorId: authenticatedUser?._id || null,
+      actorType: authenticatedUser ? 'user' : 'guest',
       action: 'sales_order.create',
       entityType: 'sales_order',
       entityId: order._id,
@@ -173,7 +219,265 @@ router.post('/public/company/:companyId/checkout', async (req, res) => {
   }
 });
 
+router.post('/public/retail/company/:companyId/checkout', authMiddleware, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.companyId)) {
+      return res.status(400).json({ error: 'Identifiant d’entreprise invalide.' });
+    }
+    const company = await Company.findById(req.params.companyId)
+      .select('name categoryId categoryIds businessTypeId setupStatus profileValidatedAt paymentAccounts latitude longitude deliveryZones')
+      .lean();
+    if (!canDisplayPublicRetailCatalog(company)) {
+      return res.status(404).json({ error: 'Catalogue Retail introuvable.' });
+    }
+
+    let input;
+    try {
+      input = normalizeRetailCheckoutInput(req.body);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+    assertOnlinePaymentReady(input.paymentMethod, input.currency, company);
+    const user = await User.findOne({ firebaseUid: req.user?.uid }).select('_id firebaseUid name email');
+    if (!user) return res.status(401).json({ error: 'Connecte-toi pour passer cette commande.' });
+
+    let deliveryDistanceKm = 0;
+    let deliveryFeeMinor = 0;
+    let deliveryZone = null;
+    if (input.fulfillmentType === 'delivery') {
+      if (company.latitude == null || company.longitude == null
+        || !Number.isFinite(Number(company.latitude)) || !Number.isFinite(Number(company.longitude))) {
+        return res.status(400).json({ error: 'Le vendeur n’a pas configuré la position de son établissement.' });
+      }
+      deliveryDistanceKm = distanceBetweenCoordinatesKm(
+        { latitude: company.latitude, longitude: company.longitude },
+        { latitude: input.deliveryLatitude, longitude: input.deliveryLongitude },
+      );
+      deliveryZone = findDeliveryZone(company.deliveryZones, deliveryDistanceKm);
+      if (!deliveryZone) return res.status(400).json({ error: 'Cette adresse est en dehors des zones de livraison.' });
+    }
+
+    const productIds = input.lines.map((line) => line.productId);
+    if (productIds.some((id) => !mongoose.Types.ObjectId.isValid(id))) {
+      return res.status(400).json({ error: 'Identifiant produit invalide.' });
+    }
+    const products = await Product.find({
+      _id: { $in: productIds },
+      companyId: company._id,
+      status: 'active',
+      isAvailable: { $ne: false },
+    }).select('_id name sku priceMinor currency discountPercent bulkMinQuantity bulkDiscountPercent stockOnHand');
+    if (products.length !== productIds.length) {
+      return res.status(409).json({ error: 'Un ou plusieurs produits ne sont plus disponibles.' });
+    }
+
+    const productsById = new Map(products.map((product) => [String(product._id), product]));
+    const needsExchangeRates = products.some((product) => product.currency !== 'USD') || (deliveryZone && deliveryZone.currency !== 'USD');
+    const { rates } = needsExchangeRates ? await getExchangeRates() : { rates: null };
+    if (deliveryZone) {
+      deliveryFeeMinor = convertMinorAmount(deliveryZone.feeMinor, deliveryZone.currency, 'USD', rates);
+      if (deliveryFeeMinor === null) return res.status(503).json({ error: 'Conversion des frais de livraison indisponible.' });
+    }
+
+    let subtotalMinor = 0;
+    const lines = input.lines.map((line) => {
+      const product = productsById.get(line.productId);
+      if (product.stockOnHand < line.quantity) {
+        throw Object.assign(new Error(`Stock insuffisant pour ${product.name}.`), { status: 409 });
+      }
+      let unitPriceMinor = lineUnitPriceMinor(product, line.quantity);
+      if (product.currency !== 'USD') {
+        unitPriceMinor = convertMinorAmount(unitPriceMinor, product.currency, 'USD', rates);
+        if (unitPriceMinor === null) throw Object.assign(new Error('Conversion de prix indisponible.'), { status: 503 });
+      }
+      const lineTotalMinor = line.quantity * unitPriceMinor;
+      if (!Number.isSafeInteger(lineTotalMinor) || !Number.isSafeInteger(subtotalMinor + lineTotalMinor)) {
+        throw Object.assign(new Error('Le total de la commande est trop élevé.'), { status: 400 });
+      }
+      subtotalMinor += lineTotalMinor;
+      return {
+        productId: product._id,
+        productName: product.name,
+        sku: product.sku,
+        quantity: line.quantity,
+        unitPriceMinor,
+        lineTotalMinor,
+        note: line.note,
+      };
+    });
+    const totalMinor = subtotalMinor + deliveryFeeMinor;
+    if (!Number.isSafeInteger(totalMinor) || totalMinor <= 0) {
+      return res.status(400).json({ error: 'Le total de la commande est invalide.' });
+    }
+
+    const orderNumber = `SO-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const order = await SalesOrder.create({
+      companyId: company._id,
+      createdBy: user._id,
+      updatedBy: user._id,
+      orderNumber,
+      status: 'draft',
+      channel: 'retail_app',
+      fulfillmentType: input.fulfillmentType,
+      deliveryAddress: input.deliveryAddress,
+      deliveryLatitude: input.deliveryLatitude,
+      deliveryLongitude: input.deliveryLongitude,
+      deliveryDistanceKm: Number(deliveryDistanceKm.toFixed(2)),
+      deliveryFeeMinor,
+      paymentMethod: input.paymentMethod,
+      currency: 'USD',
+      customer: input.customer,
+      lines,
+      totalMinor,
+      notes: input.notes,
+    });
+
+    let checkoutUrl = '';
+    try {
+      if (input.paymentMethod === 'stripe') {
+        const checkout = await createStripeCheckoutSession(order, company);
+        order.stripeCheckoutSessionId = checkout.stripeCheckoutSessionId;
+        order.stripePaymentIntentId = checkout.stripePaymentIntentId;
+        checkoutUrl = checkout.url;
+      } else {
+        const checkout = await createPaypalOrder(order, company);
+        order.paypalOrderId = checkout.paypalOrderId;
+        checkoutUrl = checkout.url;
+      }
+      await order.save();
+    } catch (error) {
+      order.paymentStatus = 'failed';
+      await order.save();
+      throw error;
+    }
+
+    await logAuditEvent(req, {
+      companyId: company._id,
+      actorId: user._id,
+      actorType: 'user',
+      action: 'sales_order.create',
+      entityType: 'sales_order',
+      entityId: order._id,
+      changedFields: ['channel', 'fulfillmentType', 'deliveryAddress', 'deliveryFeeMinor', 'customer', 'lines', 'totalMinor', 'paymentMethod'],
+    });
+    return res.status(201).json({ success: true, data: { ...order.toObject(), checkoutUrl } });
+  } catch (error) {
+    if (error?.status) return res.status(error.status).json({ error: error.message });
+    return res.status(500).json({ error: 'Impossible de créer la commande Retail.' });
+  }
+});
+
 router.use(authMiddleware);
+
+router.patch('/company/:companyId/delivery-zones', async (req, res) => {
+  try {
+    const access = await resolveSalesAccess(req, res, req.params.companyId, 'orders:manage');
+    if (!access) return;
+    if (!isProductCatalogCategory(access.company)) {
+      return res.status(400).json({ error: 'Les zones de livraison sont réservées aux entreprises du catalogue produits.' });
+    }
+    let deliveryZones;
+    try {
+      deliveryZones = normalizeDeliveryZones(req.body?.deliveryZones);
+    } catch (validationError) {
+      return res.status(400).json({ error: validationError.message });
+    }
+    const updatedCompany = await Company.findByIdAndUpdate(
+      access.company._id,
+      { $set: { deliveryZones } },
+      { new: true, runValidators: true },
+    ).select('deliveryZones').lean();
+    if (!updatedCompany) return res.status(404).json({ error: 'Entreprise introuvable.' });
+    return res.json({ success: true, data: updatedCompany });
+  } catch (_) {
+    return res.status(500).json({ error: 'Impossible d’enregistrer les zones de livraison.' });
+  }
+});
+
+router.get('/mine/:orderId/receipt', async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.orderId)) {
+      return res.status(400).json({ error: 'Identifiant commande invalide.' });
+    }
+    const user = await User.findOne({ firebaseUid: req.user?.uid }).select('_id name');
+    if (!user) return res.status(404).json({ error: 'Commande introuvable.' });
+    const order = await SalesOrder.findOne({ _id: req.params.orderId, createdBy: user._id, channel: { $in: ['restaurant_app', 'retail_app'] } }).lean();
+    if (!order) return res.status(404).json({ error: 'Commande introuvable.' });
+    if (!['confirmed', 'ready', 'fulfilled'].includes(order.status)) {
+      return res.status(409).json({ error: 'La facture est disponible après l’acceptation de la commande.' });
+    }
+    const company = await Company.findById(order.companyId).select('name logo phone email location website').lean();
+    const subtotalMinor = order.lines.reduce((sum, line) => sum + line.lineTotalMinor, 0);
+    return res.json({
+      success: true,
+      data: {
+        invoiceNumber: `FAC-${order.orderNumber}`,
+        issuedAt: order.confirmedAt || order.createdAt,
+        company: {
+          name: company?.name || '',
+          logo: toAbsoluteMediaUrl(req, company?.logo),
+          phone: company?.phone || '',
+          email: company?.email || '',
+          location: company?.location || '',
+          website: company?.website || '',
+        },
+        customerName: order.customer?.name || user.name || '',
+        order: {
+          orderNumber: order.orderNumber,
+          status: order.status,
+          fulfillmentType: order.fulfillmentType,
+          tableNumber: order.tableNumber,
+          deliveryAddress: order.deliveryAddress || '',
+          deliveryFeeMinor: order.deliveryFeeMinor || 0,
+          currency: order.currency,
+          lines: order.lines.map((line) => ({
+            productName: line.productName,
+            quantity: line.quantity,
+            unitPriceMinor: line.unitPriceMinor,
+            lineTotalMinor: line.lineTotalMinor,
+            note: line.note || '',
+          })),
+          subtotalMinor,
+          tipMinor: order.tipMinor || 0,
+          totalMinor: order.totalMinor,
+          paymentMethod: order.paymentMethod,
+          paymentStatus: order.paymentStatus,
+          paidMinor: order.paidMinor || 0,
+        },
+      },
+    });
+  } catch (_) {
+    return res.status(500).json({ error: 'Impossible de charger la facture.' });
+  }
+});
+
+router.get('/mine', async (req, res) => {
+  try {
+    const user = await User.findOne({ firebaseUid: req.user?.uid }).select('_id');
+    if (!user) return res.json({ success: true, data: [] });
+    const orders = await SalesOrder.find({ createdBy: user._id, channel: { $in: ['restaurant_app', 'retail_app'] } })
+      .select('companyId channel orderNumber status fulfillmentType tableNumber deliveryAddress deliveryFeeMinor deliveryDistanceKm lines totalMinor tipMinor currency paymentMethod paymentStatus createdAt confirmedAt readyAt fulfilledAt cancelledAt')
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+    const companyIds = [...new Set(orders.map((order) => String(order.companyId)))];
+    const productIds = orders.flatMap((order) => order.lines.map((line) => line.productId));
+    const [companies, products] = await Promise.all([
+      Company.find({ _id: { $in: companyIds } }).select('name').lean(),
+      Product.find({ _id: { $in: productIds } }).select('prepTimeMinutes').lean(),
+    ]);
+    const companyNames = new Map(companies.map((company) => [String(company._id), company.name]));
+    const prepById = new Map(products.map((product) => [String(product._id), product.prepTimeMinutes || 0]));
+    const data = orders.map((order) => ({
+      ...order,
+      companyName: companyNames.get(String(order.companyId)) || '',
+      estimatedMinutes: Math.max(0, ...order.lines.map((line) => prepById.get(String(line.productId)) || 0)),
+    }));
+    return res.json({ success: true, data });
+  } catch (_) {
+    return res.status(500).json({ error: 'Impossible de charger tes commandes.' });
+  }
+});
 
 async function resolveSalesAccess(req, res, companyId, permission) {
   if (!mongoose.Types.ObjectId.isValid(companyId)) {
@@ -376,7 +680,7 @@ router.post('/company/:companyId', async (req, res) => {
       companyId: access.company._id,
       status: 'active',
       isAvailable: { $ne: false },
-    }).select('_id name sku priceMinor currency');
+    }).select('_id name sku priceMinor currency discountPercent bulkMinQuantity bulkDiscountPercent');
     if (products.length !== productIds.length) {
       return res.status(400).json({ error: 'Un produit de la commande est introuvable dans cette entreprise.' });
     }
@@ -388,7 +692,8 @@ router.post('/company/:companyId', async (req, res) => {
       if (product.currency !== input.currency) {
         throw Object.assign(new Error('Tous les produits doivent utiliser la devise de la commande.'), { status: 400 });
       }
-      const lineTotalMinor = line.quantity * product.priceMinor;
+      const unitPriceMinor = lineUnitPriceMinor(product, line.quantity);
+      const lineTotalMinor = line.quantity * unitPriceMinor;
       if (!Number.isSafeInteger(lineTotalMinor) || !Number.isSafeInteger(totalMinor + lineTotalMinor)) {
         throw Object.assign(new Error('Le total de la commande est trop élevé.'), { status: 400 });
       }
@@ -398,7 +703,7 @@ router.post('/company/:companyId', async (req, res) => {
         productName: product.name,
         sku: product.sku,
         quantity: line.quantity,
-        unitPriceMinor: product.priceMinor,
+        unitPriceMinor,
         lineTotalMinor,
       };
     });
@@ -516,6 +821,7 @@ async function transitionSalesOrder(req, res, action) {
   const session = await mongoose.startSession();
   let finalOrder;
   let captureRequired = false;
+  let statusChanged = false;
   try {
     await session.withTransaction(async () => {
       const order = await SalesOrder.findOne({ _id: req.params.orderId, companyId: access.company._id }).session(session);
@@ -537,7 +843,7 @@ async function transitionSalesOrder(req, res, action) {
       }
       captureRequired = action === 'confirm' && onlinePayment;
 
-      if (action === 'confirm' || (action === 'cancel' && order.status === 'confirmed')) {
+      if (action === 'confirm' || (action === 'cancel' && (order.status === 'confirmed' || order.status === 'ready'))) {
         const restoring = action === 'cancel';
         for (const line of order.lines) {
           const delta = restoring ? line.quantity : -line.quantity;
@@ -566,6 +872,9 @@ async function transitionSalesOrder(req, res, action) {
       if (action === 'confirm') {
         order.status = 'confirmed';
         order.confirmedAt = new Date();
+      } else if (action === 'ready') {
+        order.status = 'ready';
+        order.readyAt = new Date();
       } else if (action === 'fulfill') {
         order.status = 'fulfilled';
         order.fulfilledAt = new Date();
@@ -576,6 +885,7 @@ async function transitionSalesOrder(req, res, action) {
       order.updatedBy = access.user._id;
       await order.save({ session });
       finalOrder = order;
+      statusChanged = true;
     });
 
     if (captureRequired) {
@@ -606,6 +916,10 @@ async function transitionSalesOrder(req, res, action) {
       finalOrder = recorded.order;
     }
 
+    if (statusChanged) {
+      await notifyOrderStatusChange({ order: finalOrder, companyName: access.company.name, actorId: access.user._id });
+    }
+
     await logAuditEvent(req, {
       companyId: access.company._id,
       actorId: access.user._id,
@@ -627,6 +941,7 @@ async function transitionSalesOrder(req, res, action) {
 }
 
 router.post('/:orderId/confirm', (req, res) => transitionSalesOrder(req, res, 'confirm'));
+router.post('/:orderId/ready', (req, res) => transitionSalesOrder(req, res, 'ready'));
 router.post('/:orderId/fulfill', (req, res) => transitionSalesOrder(req, res, 'fulfill'));
 router.post('/:orderId/cancel', (req, res) => transitionSalesOrder(req, res, 'cancel'));
 

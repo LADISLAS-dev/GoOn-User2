@@ -30,6 +30,7 @@ import ProMyCompanyScreen       from "../screens/ProMyCompanyScreen";
 import CompanyDetailScreen      from "../screens/CompanyDetailScreen";
 import ProCompanyDetailScreen   from "../screens/ProCompanyDetailScreen";
 import ProRestaurantDashboardScreen from "../screens/ProRestaurantDashboardScreen";
+import ProBeautyDashboardScreen from "../screens/ProBeautyDashboardScreen";
 import ServiceDetailScreen      from "../screens/ServiceDetailScreen";
 import ProServiceDetailScreen   from "../screens/ProServiceDetailScreen";
 import CreateAppointmentScreen  from "../screens/CreateAppointmentScreen";
@@ -45,6 +46,9 @@ import AboutScreen     from "../screens/AboutScreen";
 import ProAboutScreen  from "../screens/ProAboutScreen";
 import ProfileScreen   from "../screens/ProfileScreen";
 import ProProfileScreen from "../screens/ProProfileScreen";
+import PaymentMethodsScreen from "../screens/PaymentMethodsScreen";
+import ProPaymentSettingsScreen from "../screens/ProPaymentSettingsScreen";
+import MyOrdersScreen from "../screens/MyOrdersScreen";
 import SettingsScreen  from "../screens/SettingsScreen";
 import ProSettingsScreen from "../screens/ProSettingsScreen";
 import NotificationLabsScreen from "../screens/NotificationLabsScreen";
@@ -121,7 +125,7 @@ function MainTabs({ route }) {
         name="CompanyHome"
         options={({ route }) => {
           const nestedRoute = getFocusedRouteNameFromRoute(route) ?? "CompanyOverview";
-          const hideTabBarRoutes = ['ServiceDetail', 'CreateAppointment', 'AppointmentDetails'];
+          const hideTabBarRoutes = ['ServiceDetail', 'CreateAppointment', 'AppointmentDetails', 'CompanyPaymentSettings'];
           return {
             tabBarLabel: "Home",
             tabBarStyle: hideTabBarRoutes.includes(nestedRoute) ? { display: "none" } : undefined,
@@ -183,7 +187,7 @@ function MainTabs({ route }) {
   );
 }
 
-function ProCompanyTabStack({ route, moduleConfigs, isRestaurantCompany }) {
+function ProCompanyTabStack({ route, moduleConfigs, isRestaurantCompany, isBeautyCompany }) {
   const { companyId, currentUserId, onboardingFlow, justCreatedCompany } = route.params || {};
   if (isRestaurantCompany === null) {
     return (
@@ -195,8 +199,8 @@ function ProCompanyTabStack({ route, moduleConfigs, isRestaurantCompany }) {
 
   return (
     <CompanyStack.Navigator
-      key={isRestaurantCompany ? 'restaurant-company-stack' : 'standard-company-stack'}
-      initialRouteName={isRestaurantCompany ? 'RestaurantDashboard' : 'CompanyOverview'}
+      key={isRestaurantCompany ? 'restaurant-company-stack' : isBeautyCompany ? 'beauty-company-stack' : 'standard-company-stack'}
+      initialRouteName={isRestaurantCompany ? 'RestaurantDashboard' : isBeautyCompany ? 'BeautyDashboard' : 'CompanyOverview'}
       screenOptions={{ headerShown: false }}
     >
       <CompanyStack.Screen
@@ -214,6 +218,20 @@ function ProCompanyTabStack({ route, moduleConfigs, isRestaurantCompany }) {
           />
         )}
       </CompanyStack.Screen>
+      <CompanyStack.Screen name="BeautyDashboard">
+        {(props) => (
+          <ProBeautyDashboardScreen
+            {...props}
+            companyId={companyId}
+            moduleConfigs={moduleConfigs}
+          />
+        )}
+      </CompanyStack.Screen>
+      <CompanyStack.Screen
+        name="CompanyPaymentSettings"
+        component={ProPaymentSettingsScreen}
+        initialParams={{ companyId }}
+      />
       <CompanyStack.Screen name="ServiceDetail" component={ProServiceDetailScreen} />
       <CompanyStack.Screen name="CreateAppointment" component={ProCreateAppointmentScreen} />
       <CompanyStack.Screen name="AppointmentDetails" component={ProAppointmentDetailsScreen} />
@@ -230,11 +248,13 @@ function ProMainTabs({ route }) {
   const { companyId, currentUserId, onboardingFlow, justCreatedCompany } = navParams || {};
   const [moduleConfigs, setModuleConfigs] = useState(null);
   const [isRestaurantCompany, setIsRestaurantCompany] = useState(null);
+  const [isBeautyCompany, setIsBeautyCompany] = useState(null);
 
   useFocusEffect(useCallback(() => {
     let isCurrent = true;
     setModuleConfigs(companyId ? [] : null);
     setIsRestaurantCompany(companyId ? null : false);
+    setIsBeautyCompany(companyId ? null : false);
 
     if (!companyId) {
       return () => {
@@ -258,10 +278,16 @@ function ProMainTabs({ route }) {
           company?.categoryId,
           company?.businessTypeId,
         ].map((id) => String(id || '').trim());
-        if (isCurrent) setIsRestaurantCompany(categoryIds.includes('2'));
+        if (isCurrent) {
+          setIsRestaurantCompany(categoryIds.includes('2'));
+          setIsBeautyCompany(categoryIds.includes('3'));
+        }
       })
       .catch(() => {
-        if (isCurrent) setIsRestaurantCompany(false);
+        if (isCurrent) {
+          setIsRestaurantCompany(false);
+          setIsBeautyCompany(false);
+        }
       });
 
     return () => {
@@ -283,6 +309,7 @@ function ProMainTabs({ route }) {
           defaultCurrentUserId={currentUserId}
           moduleConfigs={moduleConfigs}
           isRestaurantCompany={isRestaurantCompany}
+          isBeautyCompany={isBeautyCompany}
         />
       )}
       screenOptions={{ headerShown: false }}
@@ -291,7 +318,7 @@ function ProMainTabs({ route }) {
         name="CompanyHome"
         options={({ route }) => {
           const nestedRoute = getFocusedRouteNameFromRoute(route) ?? "CompanyOverview";
-          const hideTabBarRoutes = ['ServiceDetail', 'CreateAppointment', 'AppointmentDetails'];
+          const hideTabBarRoutes = ['ServiceDetail', 'CreateAppointment', 'AppointmentDetails', 'CompanyPaymentSettings'];
           return {
             tabBarLabel: "Home",
             tabBarStyle: hideTabBarRoutes.includes(nestedRoute) ? { display: "none" } : undefined,
@@ -303,6 +330,7 @@ function ProMainTabs({ route }) {
             {...props}
             moduleConfigs={moduleConfigs}
             isRestaurantCompany={isRestaurantCompany}
+            isBeautyCompany={isBeautyCompany}
             route={{
               ...props.route,
               params: {
@@ -560,6 +588,8 @@ export default function AppNavigator() {
         <RootStack.Screen name="CreateCompany"      component={CreateCompanyComponent}     />
         <RootStack.Screen name="MyCompany"          component={MyCompanyComponent}         />
         <RootStack.Screen name="Profile"            component={ProfileComponent}           />
+        <RootStack.Screen name="PaymentMethods"     component={PaymentMethodsScreen}       />
+        <RootStack.Screen name="MyOrders"           component={MyOrdersScreen}             />
         <RootStack.Screen name="Settings"           component={SettingsComponent}          />
         <RootStack.Screen name="NotificationLabs"   component={NotificationLabsComponent}  />
         <RootStack.Screen name="AnalyticsDashboard" component={AnalyticsDashboardComponent} />

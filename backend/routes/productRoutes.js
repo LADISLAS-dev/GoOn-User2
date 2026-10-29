@@ -10,23 +10,16 @@ const { logAuditEvent } = require('../services/auditLogService');
 const { normalizePagination } = require('../services/customerService');
 const { storeUploadedFile } = require('../services/mediaStorage');
 const { getPublicPaymentOptions } = require('../services/onlinePaymentService');
+const { toAbsoluteMediaUrl } = require('../utils/mediaUrl');
 const {
   buildProductFilter,
+  canDisplayPublicRetailCatalog,
   canDisplayPublicRestaurantMenu,
   normalizeProductInput,
   normalizeStockMovement,
 } = require('../services/productService');
 
 const router = express.Router();
-
-function toAbsoluteMediaUrl(req, value) {
-  const raw = String(value || '').trim();
-  if (!raw || /^https?:\/\//i.test(raw)) return raw;
-  const host = req.get('x-forwarded-host') || req.get('host');
-  if (!host) return raw;
-  const protocol = req.get('x-forwarded-proto') || req.protocol || 'https';
-  return `${protocol}://${host}${raw.startsWith('/') ? raw : `/${raw}`}`;
-}
 
 router.post('/company/:companyId/upload-image', authMiddleware, upload.single('image'), async (req, res) => {
   try {
@@ -80,7 +73,7 @@ router.get('/public/company/:companyId', async (req, res) => {
     const filter = { companyId: company._id, status: 'active' };
     const [products, total] = await Promise.all([
       Product.find(filter)
-        .select('name description imageUrl category priceMinor currency isAvailable')
+        .select('name description imageUrl category priceMinor currency isAvailable isFeatured likesCount badge discountPercent prepTimeMinutes calories tags allergens bulkMinQuantity bulkDiscountPercent')
         .sort({ category: 1, name: 1 })
         .skip((page - 1) * limit)
         .limit(limit)
@@ -95,6 +88,87 @@ router.get('/public/company/:companyId', async (req, res) => {
     });
   } catch (_) {
     return res.status(500).json({ error: 'Impossible de charger le menu.' });
+  }
+});
+
+router.get('/public/retail/company/:companyId', async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.companyId)) {
+      return res.status(400).json({ error: 'Identifiant d’entreprise invalide.' });
+    }
+    const company = await Company.findById(req.params.companyId)
+      .select('categoryId categoryIds businessTypeId setupStatus profileValidatedAt paymentAccounts latitude longitude deliveryZones')
+      .lean();
+    if (!canDisplayPublicRetailCatalog(company)) {
+      return res.status(404).json({ error: 'Catalogue Retail introuvable.' });
+    }
+
+    const { page, limit } = normalizePagination(req.query.page, req.query.limit);
+    const filter = { companyId: company._id, status: 'active', isAvailable: { $ne: false }, stockOnHand: { $gt: 0 } };
+    const [products, total] = await Promise.all([
+      Product.find(filter)
+        .select('name description imageUrl category priceMinor currency stockOnHand isAvailable badge discountPercent bulkMinQuantity bulkDiscountPercent')
+        .sort({ category: 1, name: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      Product.countDocuments(filter),
+    ]);
+    return res.json({
+      success: true,
+      data: products,
+      pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      paymentOptions: getPublicPaymentOptions(company),
+      deliveryZones: company.deliveryZones || [],
+      storeLocation: { latitude: company.latitude, longitude: company.longitude },
+    });
+  } catch (_) {
+    return res.status(500).json({ error: 'Impossible de charger le catalogue Retail.' });
+  }
+});
+
+router.get('/public/company/:companyId/my-likes', authMiddleware, async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.companyId)) {
+      return res.status(400).json({ error: 'Identifiant d’entreprise invalide.' });
+    }
+    const liked = await Product.find({
+      companyId: req.params.companyId,
+      status: 'active',
+      likedBy: req.user.uid,
+    }).select('_id').lean();
+    return res.json({ success: true, data: liked.map((p) => String(p._id)) });
+  } catch (_) {
+    return res.status(500).json({ error: 'Impossible de charger vos j’aime.' });
+  }
+});
+
+router.post('/public/company/:companyId/:productId/like', authMiddleware, async (req, res) => {
+  try {
+    const { companyId, productId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(companyId) || !mongoose.Types.ObjectId.isValid(productId)) {
+      return res.status(400).json({ error: 'Identifiant invalide.' });
+    }
+    const uid = req.user.uid;
+    const base = { _id: productId, companyId, status: 'active' };
+    let product = await Product.findOneAndUpdate(
+      { ...base, likedBy: { $ne: uid } },
+      { $addToSet: { likedBy: uid }, $inc: { likesCount: 1 } },
+      { new: true, timestamps: false }
+    ).select('likesCount').lean();
+    let liked = true;
+    if (!product) {
+      product = await Product.findOneAndUpdate(
+        { ...base, likedBy: uid },
+        { $pull: { likedBy: uid }, $inc: { likesCount: -1 } },
+        { new: true, timestamps: false }
+      ).select('likesCount').lean();
+      liked = false;
+    }
+    if (!product) return res.status(404).json({ error: 'Plat introuvable.' });
+    return res.json({ success: true, liked, likesCount: Math.max(0, product.likesCount || 0) });
+  } catch (_) {
+    return res.status(500).json({ error: 'Impossible de mettre à jour le j’aime.' });
   }
 });
 
@@ -180,6 +254,9 @@ router.post('/company/:companyId', async (req, res) => {
       createdBy: access.user._id,
       updatedBy: access.user._id,
     });
+    if (product.isFeatured) {
+      await Product.updateMany({ companyId: access.company._id, _id: { $ne: product._id }, isFeatured: true }, { isFeatured: false });
+    }
 
     await logAuditEvent(req, {
       companyId: access.company._id,
@@ -217,6 +294,9 @@ router.patch('/:productId', async (req, res) => {
 
     Object.assign(existing, input, { updatedBy: access.user._id });
     await existing.save();
+    if (input.isFeatured === true) {
+      await Product.updateMany({ companyId: existing.companyId, _id: { $ne: existing._id }, isFeatured: true }, { isFeatured: false });
+    }
     await logAuditEvent(req, {
       companyId: access.company._id,
       actorId: access.user._id,

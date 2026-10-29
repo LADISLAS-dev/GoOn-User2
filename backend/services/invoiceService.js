@@ -90,6 +90,9 @@ function buildInvoiceInputFromSalesOrder(order = {}) {
   if (Number(order.tipMinor) > 0) {
     lines.push({ description: 'Pourboire / Tip', quantity: 1, unitPriceMinor: order.tipMinor, taxRateBps: 0 });
   }
+  if (order.channel === 'retail_app' && Number(order.deliveryFeeMinor) > 0) {
+    lines.push({ description: 'Delivery', quantity: 1, unitPriceMinor: Number(order.deliveryFeeMinor), taxRateBps: 0 });
+  }
   const invoice = normalizeInvoiceInput({
     currency: order.currency,
     notes,

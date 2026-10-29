@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   canTransitionSalesOrder,
   getSalesOrderPaymentStatus,
+  normalizeRetailCheckoutInput,
   normalizeSalesOrderInput,
   normalizeRestaurantCheckoutInput,
   calculateRestaurantOrderTotals,
@@ -52,6 +53,45 @@ test('public restaurant checkout accepts Stripe and PayPal only in USD', () => {
   }));
 });
 
+test('Retail checkout requires an online payment and a valid delivery destination', () => {
+  const base = {
+    currency: 'USD',
+    customer: { name: 'Samira' },
+    paymentMethod: 'stripe',
+    lines: [{ productId: 'p1', quantity: 1 }],
+  };
+  assert.equal(normalizeRetailCheckoutInput({ ...base, fulfillmentType: 'pickup' }).deliveryAddress, '');
+  assert.deepEqual(
+    normalizeRetailCheckoutInput({
+      ...base,
+      fulfillmentType: 'delivery',
+      deliveryAddress: '10 Main Street',
+      deliveryLatitude: 14.7,
+      deliveryLongitude: -17.4,
+    }).deliveryAddress,
+    '10 Main Street',
+  );
+  assert.throws(() => normalizeRetailCheckoutInput({ ...base, fulfillmentType: 'delivery' }));
+  assert.throws(() => normalizeRetailCheckoutInput({ ...base, fulfillmentType: 'delivery', deliveryAddress: '10 Main Street', deliveryLatitude: null, deliveryLongitude: null }));
+  assert.throws(() => normalizeRetailCheckoutInput({ ...base, fulfillmentType: 'delivery', deliveryAddress: '10 Main Street', deliveryLatitude: 999, deliveryLongitude: 0 }));
+  assert.throws(() => normalizeRetailCheckoutInput({ ...base, fulfillmentType: 'pickup', paymentMethod: 'pay_at_venue' }));
+});
+
+test('delivery zones require increasing distance limits and resolve the first matching band', () => {
+  const { findDeliveryZone, normalizeDeliveryZones } = require('../services/deliveryService');
+  const zones = normalizeDeliveryZones([
+    { maxDistanceKm: 5, feeMinor: 500, currency: 'usd' },
+    { maxDistanceKm: 10, feeMinor: 900, currency: 'USD' },
+  ]);
+  assert.equal(findDeliveryZone(zones, 4.9).feeMinor, 500);
+  assert.equal(findDeliveryZone(zones, 7).feeMinor, 900);
+  assert.equal(findDeliveryZone(zones, 12), null);
+  assert.throws(() => normalizeDeliveryZones([
+    { maxDistanceKm: 10, feeMinor: 500, currency: 'USD' },
+    { maxDistanceKm: 5, feeMinor: 900, currency: 'USD' },
+  ]));
+});
+
 test('sales order snapshots customer and accepts unique product quantities', () => {
   const order = normalizeSalesOrderInput({
     currency: 'xof',
@@ -93,4 +133,29 @@ test('sales orders follow draft, confirm, fulfill and cancel transition rules', 
   assert.equal(canTransitionSalesOrder('confirmed', 'cancel'), true);
   assert.equal(canTransitionSalesOrder('fulfilled', 'cancel'), false);
   assert.equal(canTransitionSalesOrder('cancelled', 'confirm'), false);
+});
+test('takeaway orders require a name or phone and reject unknown fulfillment types', () => {
+  const base = { currency: 'XOF', lines: [{ productId: 'p1', quantity: 1 }] };
+  assert.throws(() => normalizeRestaurantCheckoutInput({ ...base, fulfillmentType: 'takeaway', tableNumber: '4' }));
+  assert.equal(normalizeRestaurantCheckoutInput({ ...base, fulfillmentType: 'takeaway', customer: { name: 'Samira' } }).fulfillmentType, 'takeaway');
+  assert.throws(() => normalizeRestaurantCheckoutInput({ ...base, fulfillmentType: 'delivery', customer: { name: 'Samira' } }));
+});
+
+test('ready is an intermediate order status before service', () => {
+  assert.equal(canTransitionSalesOrder('confirmed', 'ready'), true);
+  assert.equal(canTransitionSalesOrder('draft', 'ready'), false);
+  assert.equal(canTransitionSalesOrder('ready', 'fulfill'), true);
+  assert.equal(canTransitionSalesOrder('ready', 'cancel'), true);
+  assert.equal(canTransitionSalesOrder('fulfilled', 'ready'), false);
+});
+
+test('order status notifications are localized and skip unknown statuses', () => {
+  const { buildOrderStatusCopy } = require('../services/orderNotificationService');
+  const context = { company: 'Chez Awa', orderNumber: 'SO-1', takeaway: true };
+  assert.match(buildOrderStatusCopy('fr', 'ready', context).message, /pr\u00eate \u00e0 \u00eatre r\u00e9cup\u00e9r\u00e9e/);
+  assert.match(buildOrderStatusCopy('en', 'ready', context).message, /ready for pickup/);
+  assert.equal(buildOrderStatusCopy('en', 'draft', context), null);
+  assert.equal(buildOrderStatusCopy('xx', 'cancelled', context).title, 'Order cancelled');
+  assert.match(buildOrderStatusCopy('en', 'ready', { ...context, retail: true, delivery: true }).message, /out for delivery/);
+  assert.match(buildOrderStatusCopy('fr', 'ready', { ...context, retail: true, delivery: false }).message, /prete a etre recuperee/);
 });

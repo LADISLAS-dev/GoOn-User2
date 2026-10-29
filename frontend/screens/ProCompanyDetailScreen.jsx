@@ -27,16 +27,23 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import api, { getCompanyById, getProducts } from "../services/api";
 import { useUser } from "../context/UserContext";
 import { useLanguage } from "../context/LanguageContext";
+import { useTheme } from "../context/ThemeContext";
+import { dishBadges, unitPrice } from "../utils/dishPricing";
+import { getProductCatalogCategoryId, getServiceRequestCategoryId } from "../utils/businessTypes";
+import { TAG_ICONS } from "../components/menu/theme";
+import { CalendarDays, Pencil, Plus, Scissors, Trash2 } from 'lucide-react-native';
 import AuthPromptModal from '../components/AuthPromptModal';
 import { auth } from '../services/firebase';
 import { API_URL, APP_DOWNLOAD_URLS } from '../env';
 import { isLocalAssetUri, resolveAvatarUri } from "../utils/profileUtils";
 import { useBusinessTypes } from "../hooks/useBusinessTypes";
 import { CompanyCategoryCover, CompanyCategoryPhotoBadge, getCompanyCategoryVisual } from '../components/CompanyCategoryVisual';
+import BeautyFashionProfileExperience, { DEFAULT_BEAUTY_SERVICE_CATEGORIES } from '../components/BeautyFashionProfileExperience';
 import { LayoutAnimation, UIManager } from "react-native";
 import { Animated } from "react-native";
 import { BlurView } from "expo-blur";
 import { WebView } from "react-native-webview";
+import { ChevronLeft, Grid2X2, LayoutDashboard, MoreHorizontal, Tags, Utensils } from 'lucide-react-native';
 
 
 if (Platform.OS === "android") {
@@ -581,6 +588,7 @@ const buildCarouselMediaSource = (rawValue = "") => {
 export default function CompanyDetailScreen({ route, navigation }) {
   const { user, isGuest } = useUser();
   const { t, language, activeLanguage } = useLanguage();
+  const { colors: themeColors } = useTheme();
   const serviceModalUi = SERVICE_MODAL_UI[language] || SERVICE_MODAL_UI.en;
   const tr = useCallback((key, fallback) => t(key, fallback), [t]);
   const companyId = route?.params?.companyId;
@@ -589,6 +597,9 @@ export default function CompanyDetailScreen({ route, navigation }) {
 
   const [company, setCompany] = useState(null);
   const [menuProducts, setMenuProducts] = useState([]);
+  const [retailProducts, setRetailProducts] = useState([]);
+  const [retailProductsLoading, setRetailProductsLoading] = useState(false);
+  const [retailProductsError, setRetailProductsError] = useState('');
   const [menuCanCreate, setMenuCanCreate] = useState(false);
   const [menuProductsLoading, setMenuProductsLoading] = useState(false);
   const [menuProductsError, setMenuProductsError] = useState('');
@@ -607,6 +618,11 @@ export default function CompanyDetailScreen({ route, navigation }) {
   const [locationLoading, setLocationLoading] = useState(false);
   const [showAuthPrompt, setShowAuthPrompt] = useState(false);
 
+  useEffect(() => {
+    const requestedTab = route?.params?.initialTab;
+    if (requestedTab === 'services' || requestedTab === 'gallery') setActiveTab(requestedTab);
+  }, [route?.params?.initialTab]);
+
   const [editInfoModalVisible, setEditInfoModalVisible] = useState(false);
   const [editPhone, setEditPhone] = useState("");
   const [editEmail, setEditEmail] = useState("");
@@ -619,6 +635,7 @@ export default function CompanyDetailScreen({ route, navigation }) {
   const [selectedService, setSelectedService] = useState(null);
   const [svcName, setSvcName] = useState("");
   const [svcPrice, setSvcPrice] = useState("");
+  const [svcCategoryId, setSvcCategoryId] = useState(DEFAULT_BEAUTY_SERVICE_CATEGORIES[0].id);
   const [svcImage, setSvcImage] = useState("");
   const [svcVideo, setSvcVideo] = useState("");
   const [svcDescription, setSvcDescription] = useState("");
@@ -634,17 +651,33 @@ export default function CompanyDetailScreen({ route, navigation }) {
   const carouselImages = company?.carouselImages || [];
   const galleryImages = company?.galleryImages || [];
   const services = company?.services || [];
+  const beautyServiceCategories = Array.isArray(company?.beautyServiceCategories) && company.beautyServiceCategories.length
+    ? company.beautyServiceCategories
+    : DEFAULT_BEAUTY_SERVICE_CATEGORIES;
   const localizedCategories = useBusinessTypes(CATEGORIES, activeLanguage);
   const selectedCategoryLabels = selectedCategoryIds
     .map((id) => localizedCategories.find((category) => category.id === id)?.label)
     .filter(Boolean);
   const primaryCategoryId = normalizeCompanyCategories(company)[0] || '';
   const isRestaurantBusiness = normalizeCompanyCategories(company).includes('2');
+  const isTechnologyBusiness = normalizeCompanyCategories(company).includes('1');
+  const isBeautyBusiness = normalizeCompanyCategories(company).includes('3');
+  const isHealthBusiness = normalizeCompanyCategories(company).includes('4');
+  const productCatalogCategoryId = getProductCatalogCategoryId(normalizeCompanyCategories(company));
+  const isProductCatalogBusiness = !!productCatalogCategoryId;
+  const serviceRequestCategoryId = getServiceRequestCategoryId(normalizeCompanyCategories(company));
+  const isServiceRequestBusiness = !isRestaurantBusiness && !isTechnologyBusiness && !isBeautyBusiness && !isHealthBusiness && !!serviceRequestCategoryId;
   const categoryVisual = getCompanyCategoryVisual(primaryCategoryId, localizedCategories, tr('sectorsLabel', 'Business'));
+  const serviceCategoryVisual = getCompanyCategoryVisual(
+    isTechnologyBusiness ? '1' : isBeautyBusiness ? '3' : isHealthBusiness ? '4' : isProductCatalogBusiness ? productCatalogCategoryId : isServiceRequestBusiness ? serviceRequestCategoryId : primaryCategoryId,
+    localizedCategories,
+    tr('sectorsLabel', 'Business'),
+  );
   useEffect(() => {
-    if (isRestaurantBusiness) setActiveTab('menu');
-    else if (activeTab === 'menu') setActiveTab('services');
-  }, [isRestaurantBusiness, activeTab]);
+    setActiveTab((currentTab) => (
+      isRestaurantBusiness ? 'menu' : currentTab === 'menu' ? 'services' : currentTab
+    ));
+  }, [isRestaurantBusiness]);
 
   useEffect(() => {
     let isCurrent = true;
@@ -677,9 +710,27 @@ export default function CompanyDetailScreen({ route, navigation }) {
   }, [companyId, isRestaurantBusiness, tr]);
 
   useEffect(() => {
-    if (isRestaurantBusiness) setActiveTab('menu');
-    else if (activeTab === 'menu') setActiveTab('services');
-  }, [isRestaurantBusiness, activeTab]);
+    let isCurrent = true;
+    if (!companyId || !isProductCatalogBusiness) {
+      setRetailProducts([]);
+      setRetailProductsError('');
+      setRetailProductsLoading(false);
+      return () => { isCurrent = false; };
+    }
+    setRetailProductsLoading(true);
+    getProducts(companyId, { page: 1, limit: 100, status: 'active' })
+      .then((result) => { if (isCurrent) setRetailProducts(result?.data || []); })
+      .catch((loadError) => {
+        if (isCurrent) {
+          setRetailProducts([]);
+          setRetailProductsError(loadError?.response?.data?.error || tr('menuLoadError', 'Unable to load products.'));
+        }
+      })
+      .finally(() => { if (isCurrent) setRetailProductsLoading(false); });
+    return () => { isCurrent = false; };
+  }, [companyId, isProductCatalogBusiness, tr]);
+
+  const featuredDish = menuProducts.find((product) => product.isFeatured && product.isAvailable !== false);
   const ownerId =
     typeof company?.ownerId === "object"
       ? company?.ownerId?._id
@@ -834,6 +885,25 @@ export default function CompanyDetailScreen({ route, navigation }) {
     },
     [companyId, currentUserId],
   );
+
+  const saveBeautyServiceCategories = async (categories) => {
+    if (!ensureCanEdit()) return false;
+    const previousCategories = company?.beautyServiceCategories;
+    const normalizedCategories = categories.map((category) => ({
+      id: String(category.id || '').trim(),
+      fr: String(category.fr || '').trim(),
+      en: String(category.en || '').trim(),
+    })).filter((category) => category.id && category.fr && category.en);
+    applyUpdate((previous) => ({ ...previous, beautyServiceCategories: normalizedCategories }));
+    try {
+      await patchCompany(companyId, { beautyServiceCategories: normalizedCategories });
+      return true;
+    } catch (error) {
+      applyUpdate((previous) => ({ ...previous, beautyServiceCategories: previousCategories }));
+      Alert.alert(tr('error', 'Erreur'), getApiErrorMessage(error, activeLanguage === 'fr' ? 'Impossible d’enregistrer les catégories.' : 'Unable to save categories.'));
+      return false;
+    }
+  };
 
   useEffect(() => {
     if (!company?.profileValidatedAt || setupState.isReadyToValidate) return;
@@ -1366,6 +1436,7 @@ export default function CompanyDetailScreen({ route, navigation }) {
     setSelectedService(null);
     setSvcName("");
     setSvcPrice("");
+    setSvcCategoryId(beautyServiceCategories[0]?.id || DEFAULT_BEAUTY_SERVICE_CATEGORIES[0].id);
     setSvcImage("");
     setSvcVideo("");
     setSvcDescription("");
@@ -1378,6 +1449,7 @@ export default function CompanyDetailScreen({ route, navigation }) {
     setSelectedService(svc);
     setSvcName(svc.name);
     setSvcPrice(String(svc.price));
+    setSvcCategoryId(svc.categoryId || beautyServiceCategories[0]?.id || DEFAULT_BEAUTY_SERVICE_CATEGORIES[0].id);
     setSvcImage(svc.image || "");
     setSvcVideo(svc.video || "");
     setSvcDescription(svc.description || "");
@@ -1432,6 +1504,7 @@ export default function CompanyDetailScreen({ route, navigation }) {
           image: finalImage,
           video: finalVideo,
           description: svcDescription,
+          ...(isBeautyBusiness ? { categoryId: svcCategoryId } : {}),
         });
         applyUpdate((p) => ({ ...p, services: [...(p.services || []), data] }));
       } else {
@@ -1441,6 +1514,7 @@ export default function CompanyDetailScreen({ route, navigation }) {
           image: finalImage,
           video: finalVideo,
           description: svcDescription,
+          ...(isBeautyBusiness ? { categoryId: svcCategoryId } : {}),
         });
         applyUpdate((p) => ({
           ...p,
@@ -1505,23 +1579,21 @@ export default function CompanyDetailScreen({ route, navigation }) {
   }
 
   return (
-    <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor={PURPLE} />
+    <View style={[styles.root, isRestaurantBusiness && { backgroundColor: themeColors.background }]}>
+      <StatusBar barStyle="light-content" backgroundColor={isBeautyBusiness ? 'transparent' : PURPLE} />
 
       {/* HEADER */}
-      <SafeAreaView style={styles.header} edges={["top"]}>
+      <SafeAreaView style={[styles.header, isRestaurantBusiness && { backgroundColor: themeColors.pink }, isBeautyBusiness && styles.beautyHeaderOverlay]} edges={["top"]}>
         <View style={styles.headerRow}>
           <TouchableOpacity
-            style={styles.iconBtn}
+            style={[styles.iconBtn, isBeautyBusiness && styles.beautyHeaderIconBtn]}
             onPress={handleBackPress}
           >
-            <Text style={styles.iconText}>‹</Text>
+            {isBeautyBusiness ? <ChevronLeft size={21} color="#FFFFFF" /> : <Text style={styles.iconText}>‹</Text>}
           </TouchableOpacity>
           <View style={styles.headerCenter}>
-            <Text style={styles.headerTitle} numberOfLines={1}>
-              {company?.name}
-            </Text>
-            {canEdit && (
+            {!isBeautyBusiness ? <Text style={styles.headerTitle} numberOfLines={1}>{company?.name}</Text> : null}
+            {canEdit && !isBeautyBusiness && (
               <View
                 style={[
                   styles.headerStatusBadge,
@@ -1541,8 +1613,8 @@ export default function CompanyDetailScreen({ route, navigation }) {
               </View>
             )}
           </View>
-          <TouchableOpacity style={styles.iconBtn} onPress={onShare}>
-            <Text style={styles.iconText}>⤴</Text>
+          <TouchableOpacity style={[styles.iconBtn, isBeautyBusiness && styles.beautyHeaderIconBtn]} onPress={onShare}>
+            {isBeautyBusiness ? <MoreHorizontal size={19} color="#FFFFFF" /> : <Text style={styles.iconText}>⤴</Text>}
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -1559,6 +1631,24 @@ export default function CompanyDetailScreen({ route, navigation }) {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
+        {isBeautyBusiness ? (
+          <BeautyFashionProfileExperience
+            company={company}
+            services={services}
+            isFrench={activeLanguage === 'fr'}
+            mode="pro"
+            canManage={canEdit}
+            onAddService={openAdd}
+            onEditService={openEdit}
+            onDeleteService={deleteService}
+            onEditCover={() => carouselImages.length ? editCarouselImage(0) : addCarouselMedia()}
+            onManagePayments={() => navigation.navigate('CompanyPaymentSettings', { companyId })}
+            onSaveCategories={saveBeautyServiceCategories}
+            onAddGalleryImage={addGalleryImage}
+            onEditGalleryImage={editGalleryImage}
+          />
+        ) : null}
+
         {shouldShowSetupGuide && (
           <View style={styles.setupCard}>
             <View style={styles.setupHeaderRow}>
@@ -1739,150 +1829,18 @@ export default function CompanyDetailScreen({ route, navigation }) {
           </View>
         )} */}
 
-        {/* CAROUSEL */}
         <View>
-          {canEdit && (
-            <View style={styles.carouselLabel}>
-              <Text style={styles.carouselLabelText}>{tr('photos', 'Photos')}</Text>
-              {carouselImages.length > 0 && (
-                <Text style={styles.carouselCounter}>
-                  {carouselIndex + 1} / {carouselImages.length}
-                </Text>
-              )}
-            </View>
-          )}
-
-          {carouselImages.length > 0 ? (
-            <View>
-              <FlatList
-                ref={flatListRef}
-                data={carouselImages}
-                keyExtractor={(_, i) => i.toString()}
-                horizontal
-                pagingEnabled
-                showsHorizontalScrollIndicator={false}
-                snapToInterval={width}
-                decelerationRate="fast"
-                onMomentumScrollEnd={(e) => {
-                  const index = Math.round(
-                    e.nativeEvent.contentOffset.x / width,
-                  );
-                  setCarouselIndex(index);
-                }}
-                getItemLayout={(_, index) => ({
-                  length: width,
-                  offset: width * index,
-                  index,
-                })}
-                onScrollToIndexFailed={() => {}}
-                renderItem={({ item, index: i }) => (
-                  <View style={{ width, height: 230 }}>
-                    {isVideoMedia(item) ? (
-                      <View style={styles.carouselMediaVideoWrap}>
-                        <WebView
-                          source={buildCarouselMediaSource(item)}
-                          style={styles.carouselMediaVideo}
-                          allowsInlineMediaPlayback
-                          allowsFullscreenVideo
-                          mediaPlaybackRequiresUserAction={false}
-                          javaScriptEnabled
-                          scrollEnabled={false}
-                          originWhitelist={["*"]}
-                        />
-                        <View style={styles.carouselVideoPill}>
-                        </View>
-                      </View>
-                    ) : (
-                      <Image
-                        source={{ uri: imgUrl(item) }}
-                        style={styles.carouselImg}
-                      />
-                    )}
-                    <CompanyCategoryPhotoBadge visual={categoryVisual} />
-                    {canEdit && (
-                      <>
-                        <TouchableOpacity
-                          style={styles.editImgBtn}
-                          onPress={() => editCarouselImage(i)}
-                        >
-                          <Text style={styles.editImgIcon}>✏️</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.deleteImgBtn}
-                          onPress={() => deleteCarouselImage(i)}
-                        >
-                          <Text style={styles.deleteImgIcon}>🗑</Text>
-                        </TouchableOpacity>
-                      </>
-                    )}
-
-
-                            <View style={styles.appreciationFloatingBadge} pointerEvents="none">
-        {/* <Text style={styles.appreciationFloatingTitle}>Appreciation</Text> */}
-        <View style={styles.appreciationFloatingRow}>
-          <Text style={styles.appreciationFloatingValue}>👍 {appreciationLikes}</Text>
-          <Text style={styles.appreciationFloatingDivider}>•</Text>
-          {/* <Text style={styles.appreciationFloatingValue}>{appreciationTotal} avis</Text> */}
-          {appreciationAvg !== null ? (
-            <>
-              <Text style={styles.appreciationFloatingValue}>⭐ {appreciationAvg}</Text>
-              {/* <Text style={styles.appreciationFloatingDivider}>•</Text> */}
-            </>
-          ) : null}
-        </View>
-      </View>
-                  </View>
-                )}
-              />
-              <View style={styles.dots}>
-                {carouselImages.map((_, i) => (
-                  <View
-                    key={i}
-                    style={[
-                      styles.dot,
-                      i === carouselIndex && styles.dotActive,
-                    ]}
-                  />
-                ))}
-              </View>
-            </View>
-          ) : (
-            <CompanyCategoryCover
-              companyName={company?.name}
-              description={company?.description}
-              visual={categoryVisual}
-              fallbackDescription={tr('companyCategoryIntro', 'Show customers what makes this business special.')}
-            />
-          )}
-
-          {canEdit && (
-            <TouchableOpacity
-              style={[styles.addImgBtn, uploading && { opacity: 0.5 }]}
-              onPress={addCarouselMedia}
-              disabled={uploading}
-            >
-              <Text style={styles.addImgText}>+ {tr('addMedia', 'Ajouter un media')}</Text>
-            </TouchableOpacity>
-          )}
-
-          {canEdit && (
+          {canEdit && !isRestaurantBusiness && !isBeautyBusiness && (
             <View style={styles.quickActionsRow}>
-              <TouchableOpacity
-                style={styles.quickActionBtn}
-                onPress={openAdd}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.quickActionText}>+ {tr('services', 'Services')}</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.quickActionBtn, uploading && { opacity: 0.5 }]}
-                onPress={addCarouselMedia}
-                disabled={uploading}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.quickActionText}>+ {tr('coverMedia', 'Cover media')}</Text>
-              </TouchableOpacity>
+              {!isRestaurantBusiness && (
+                <TouchableOpacity
+                  style={styles.quickActionBtn}
+                  onPress={openAdd}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.quickActionText}>+ {tr('services', 'Services')}</Text>
+                </TouchableOpacity>
+              )}
 
               <TouchableOpacity
                 style={[styles.quickActionBtn, uploading && { opacity: 0.5 }]}
@@ -1916,7 +1874,7 @@ export default function CompanyDetailScreen({ route, navigation }) {
             </View>
           )}
 
-          {canEdit && !!selectedCategoryLabels.length && (
+          {canEdit && !isRestaurantBusiness && !isBeautyBusiness && !!selectedCategoryLabels.length && (
             <View style={styles.sectorBadgeWrap}>
               {selectedCategoryLabels.slice(0, 6).map((label) => (
                 <View key={label} style={styles.sectorBadge}>
@@ -1933,42 +1891,81 @@ export default function CompanyDetailScreen({ route, navigation }) {
         </View>
 
         {/* TABS */}
-        <View style={styles.tabRow}>
-          {(isRestaurantBusiness ? ['menu', 'services', 'gallery'] : ['services', 'gallery']).map((tab) => (
-            <TouchableOpacity
-              key={tab}
-              style={[
-                styles.tab,
-                isRestaurantBusiness && styles.restaurantTab,
-                activeTab === tab &&
-                  (isRestaurantBusiness
-                    ? styles.restaurantTabActive
-                    : tab === 'services' ? styles.tabActive : styles.tabActiveOutline),
-              ]}
-              onPress={() => setActiveTab(tab)}
-            >
-              <Text
+        {!isBeautyBusiness ? <View style={[styles.tabRow, isRestaurantBusiness && styles.restaurantTabRow]}>
+          {(isRestaurantBusiness ? ['menu', 'sectors', 'modules', 'workspace'] : ['services', 'gallery']).map((tab) => {
+            const Icon = { menu: Utensils, sectors: Tags, modules: Grid2X2, workspace: LayoutDashboard }[tab];
+            const isActive = activeTab === tab;
+            const label = tab === 'menu'
+              ? tr('restaurantMenu', 'Menu')
+              : tab === 'services'
+                ? tr('services', 'Services')
+                : tab === 'sectors'
+                  ? tr('sectorsLabel', 'Secteurs')
+                  : tab === 'modules'
+                    ? tr('businessModules', 'Modules métier')
+                    : tab === 'workspace'
+                      ? tr('companyWorkspace', activeLanguage === 'fr' ? 'Espace Pro' : 'Workspace')
+                      : `${tr('tabGallery', 'Gallery')} 🖼`;
+
+            return (
+              <TouchableOpacity
+                key={tab}
+                accessibilityRole="button"
+                accessibilityLabel={label}
                 style={[
-                  styles.tabText,
-                  isRestaurantBusiness && styles.restaurantTabText,
-                  activeTab === tab &&
-                    (isRestaurantBusiness
-                      ? styles.restaurantTabTextActive
-                      : tab === 'services' ? styles.tabTextActive : styles.tabTextOutline),
+                  styles.tab,
+                  isRestaurantBusiness && styles.restaurantTab,
+                  isRestaurantBusiness && {
+                    backgroundColor: isActive ? themeColors.pink : themeColors.surface,
+                    borderColor: isActive ? themeColors.pink : themeColors.border,
+                  },
+                  activeTab === tab && !isRestaurantBusiness &&
+                    (tab === 'services' ? styles.tabActive : styles.tabActiveOutline),
                 ]}
+                onPress={() => {
+                  if (tab === 'workspace') {
+                    navigation.navigate('RestaurantDashboard');
+                    return;
+                  }
+                  if (tab === 'sectors') {
+                    setSectorModalVisible(true);
+                    return;
+                  }
+                  if (tab === 'modules') {
+                    navigation.navigate('BusinessModules', {
+                      companyId: company._id,
+                      returnScreen: normalizeCompanyCategories(company).includes('2') ? 'RestaurantDashboard' : 'CompanyOverview',
+                    });
+                    return;
+                  }
+                  setActiveTab(tab);
+                }}
               >
-                {tab === 'menu' ? tr('restaurantMenu', 'Menu') : tab === 'services' ? tr('services', 'Services') : `${tr('tabGallery', 'Gallery')} 🖼`}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+                {isRestaurantBusiness && Icon ? (
+                  <Icon size={17} color={isActive ? '#FFFFFF' : themeColors.muted} strokeWidth={2} />
+                ) : null}
+                <Text
+                  style={[
+                    styles.tabText,
+                    isRestaurantBusiness && styles.restaurantTabText,
+                    isRestaurantBusiness && { color: isActive ? '#FFFFFF' : themeColors.muted },
+                    activeTab === tab && !isRestaurantBusiness &&
+                      (tab === 'services' ? styles.tabTextActive : styles.tabTextOutline),
+                  ]}
+                >
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View> : null}
 
         {activeTab === 'menu' && isRestaurantBusiness ? (
-          <View style={styles.restaurantMenuSection}>
+          <View style={[styles.restaurantMenuSection, { backgroundColor: themeColors.background, borderColor: themeColors.border }]}>
             <View style={styles.restaurantMenuHeader}>
               <View style={styles.restaurantMenuHeading}>
-                <Text style={styles.restaurantMenuEyebrow}>{tr('restaurantMenu', 'MENU')}</Text>
-                <Text style={styles.restaurantMenuTitle}>{tr('restaurantMenuTitle', 'Menu & availability')}</Text>
+                <Text style={[styles.restaurantMenuEyebrow, { color: themeColors.pinkSoft }]}>{tr('restaurantMenu', 'MENU')}</Text>
+                <Text style={[styles.restaurantMenuTitle, { color: themeColors.text }]}>{tr('restaurantMenuTitle', 'Menu & availability')}</Text>
               </View>
               {canEdit && menuCanCreate ? (
                 <TouchableOpacity
@@ -1980,6 +1977,22 @@ export default function CompanyDetailScreen({ route, navigation }) {
                 </TouchableOpacity>
               ) : null}
             </View>
+            {!menuProductsLoading && !menuProductsError && menuProducts.length ? (
+              <TouchableOpacity
+                activeOpacity={0.9}
+                style={[styles.proFeaturedBanner, { backgroundColor: themeColors.surfaceRaised }]}
+                onPress={() => canEdit && navigation.getParent()?.navigate('Inventory', { companyId })}
+              >
+                {featuredDish?.imageUrl ? <Image source={{ uri: imgUrl(featuredDish.imageUrl) }} style={styles.proFeaturedImage} /> : null}
+                <View style={styles.proFeaturedScrim} />
+                <View style={[styles.proFeaturedBadge, { backgroundColor: themeColors.pink }]}>
+                  <Text style={styles.proFeaturedBadgeText}>{activeLanguage === 'fr' ? 'Coup de cœur · vu par les clients' : "Chef's pick · shown to customers"}</Text>
+                </View>
+                <Text style={styles.proFeaturedTitle} numberOfLines={2}>
+                  {featuredDish ? featuredDish.name : (activeLanguage === 'fr' ? 'Aucun plat du chef choisi. Active « Plat du chef » dans la fiche d’un plat.' : 'No chef’s pick yet. Turn on “Chef’s pick” in a dish.')}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
             {menuProductsLoading ? <ActivityIndicator color="#C4B5FD" style={styles.restaurantMenuLoader} /> : null}
             {!menuProductsLoading && menuProductsError ? <Text style={styles.restaurantMenuEmpty}>{menuProductsError}</Text> : null}
             {!menuProductsLoading && !menuProductsError && !menuProducts.length ? (
@@ -1994,16 +2007,26 @@ export default function CompanyDetailScreen({ route, navigation }) {
               </View>
             ) : null}
             {!menuProductsLoading && !menuProductsError ? menuProducts.map((item) => (
-              <View key={String(item._id)} style={styles.restaurantMenuRow}>
+              <View key={String(item._id)} style={[styles.restaurantMenuRow, { borderTopColor: themeColors.border }]}>
                 {item.imageUrl ? <Image source={{ uri: imgUrl(item.imageUrl) }} style={styles.restaurantMenuImage} /> : <View style={styles.restaurantMenuImageEmpty}><Text>🍲</Text></View>}
                 <View style={styles.restaurantMenuItemCopy}>
-                  <Text style={styles.restaurantMenuItemName} numberOfLines={1}>{item.name}</Text>
-                  <Text style={styles.restaurantMenuItemMeta} numberOfLines={1}>{item.category || tr('otherMenuItems', 'Other')} · {formatProductPrice(item.priceMinor, item.currency, activeLanguage === 'fr' ? 'fr-FR' : 'en-US')}</Text>
+                  <Text style={[styles.restaurantMenuItemName, { color: themeColors.text }]} numberOfLines={1}>{(item.tags || []).map((tag) => TAG_ICONS[tag]).filter(Boolean).join('') ? `${(item.tags || []).map((tag) => TAG_ICONS[tag]).filter(Boolean).join('')} ` : ''}{item.name}</Text>
+                  <Text style={[styles.restaurantMenuItemMeta, { color: themeColors.muted }]} numberOfLines={1}>{item.category || tr('otherMenuItems', 'Other')} · {formatProductPrice(unitPrice(item), item.currency, activeLanguage === 'fr' ? 'fr-FR' : 'en-US')}{item.discountPercent > 0 ? ` (-${item.discountPercent}%)` : ''}</Text>
+                  {item.prepTimeMinutes || item.calories || item.likesCount ? (
+                    <Text style={[styles.restaurantMenuItemMeta, { color: themeColors.muted }]} numberOfLines={1}>
+                      {item.prepTimeMinutes ? `⏱ ${item.prepTimeMinutes} min` : ''}{item.prepTimeMinutes && item.calories ? ' · ' : ''}{item.calories ? `${item.calories} kcal` : ''}{(item.prepTimeMinutes || item.calories) && item.likesCount ? ' · ' : ''}{item.likesCount ? `❤ ${item.likesCount}` : ''}
+                    </Text>
+                  ) : null}
+                  {item.isFeatured || dishBadges(item, { new: activeLanguage === 'fr' ? 'Nouveau' : 'New', limited: activeLanguage === 'fr' ? 'Offre limitée' : 'Limited offer' }).length ? (
+                    <Text style={[styles.restaurantMenuItemMeta, { color: themeColors.pinkSoft }]} numberOfLines={1}>
+                      {[item.isFeatured ? (activeLanguage === 'fr' ? '⭐ Plat du chef' : '⭐ Chef’s pick') : '', ...dishBadges(item, { new: activeLanguage === 'fr' ? 'Nouveau' : 'New', limited: activeLanguage === 'fr' ? 'Offre limitée' : 'Limited offer' })].filter(Boolean).join(' · ')}
+                    </Text>
+                  ) : null}
                   {item.isAvailable === false ? <Text style={styles.restaurantMenuUnavailable}>{tr('unavailable', 'Unavailable')}</Text> : null}
                 </View>
                 {canEdit ? (
                   <TouchableOpacity onPress={() => navigation.getParent()?.navigate('Inventory', { companyId })} accessibilityRole="button">
-                    <Text style={styles.restaurantMenuManage}>{tr('manage', 'Manage')} ↗</Text>
+                    <Text style={[styles.restaurantMenuManage, { color: themeColors.pinkSoft }]}>{tr('manage', 'Manage')} ↗</Text>
                   </TouchableOpacity>
                 ) : null}
               </View>
@@ -2012,12 +2035,122 @@ export default function CompanyDetailScreen({ route, navigation }) {
         ) : null}
 
         {/* SERVICES */}
-        {activeTab === "services" && (
+        {activeTab === 'services' && isProductCatalogBusiness ? (
+          <View style={{ marginHorizontal: 14, marginBottom: 36, padding: 16, borderRadius: 14, backgroundColor: themeColors.surface, borderWidth: 1, borderColor: themeColors.border }}>
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionTitle, { color: themeColors.text }]}>
+                {tr('retailCatalogTitle', activeLanguage === 'fr' ? 'Catalogue produit' : 'Product catalog')} · {retailProducts.length}
+              </Text>
+              {canEdit ? (
+                <TouchableOpacity style={styles.addSvcBtn} onPress={() => navigation.getParent()?.navigate('Inventory', { companyId })}>
+                  <Text style={styles.addSvcText}>{tr('manageProducts', activeLanguage === 'fr' ? 'Gérer' : 'Manage')}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            {retailProductsLoading ? <ActivityIndicator color={themeColors.pink} style={styles.restaurantMenuLoader} /> : null}
+            {retailProductsError ? <Text style={styles.restaurantMenuEmpty}>{retailProductsError}</Text> : null}
+            {!retailProductsLoading && !retailProductsError ? retailProducts.map((item) => (
+              <View key={String(item._id)} style={[styles.restaurantMenuRow, { borderTopColor: themeColors.border }]}>
+                {item.imageUrl ? <Image source={{ uri: imgUrl(item.imageUrl) }} style={styles.restaurantMenuImage} /> : <View style={[styles.restaurantMenuImageEmpty, { backgroundColor: themeColors.surfaceRaised }]}><Text>{serviceCategoryVisual.icon}</Text></View>}
+                <View style={styles.restaurantMenuItemCopy}>
+                  <Text style={[styles.restaurantMenuItemName, { color: themeColors.text }]} numberOfLines={1}>{item.name}</Text>
+                  <Text style={[styles.restaurantMenuItemMeta, { color: themeColors.muted }]} numberOfLines={1}>{formatProductPrice(item.priceMinor, item.currency, activeLanguage === 'fr' ? 'fr-FR' : 'en-US')} · {tr('retailStockLabel', activeLanguage === 'fr' ? 'Stock' : 'Stock')} {item.stockOnHand}</Text>
+                </View>
+                {item.isAvailable === false ? <Text style={styles.restaurantMenuUnavailable}>{tr('unavailable', 'Unavailable')}</Text> : null}
+              </View>
+            )) : null}
+            {!retailProductsLoading && !retailProductsError && !retailProducts.length ? (
+              <View style={styles.restaurantMenuEmptyState}>
+                <Text style={styles.restaurantMenuEmptyIcon}>{serviceCategoryVisual.icon}</Text>
+                <Text style={styles.restaurantMenuEmpty}>{tr('retailProductsEmpty', activeLanguage === 'fr' ? 'Aucun produit actif dans le catalogue.' : 'No active products in the catalog.')}</Text>
+                {canEdit ? <TouchableOpacity style={styles.addSvcBtn} onPress={() => navigation.getParent()?.navigate('Inventory', { companyId })}><Text style={styles.addSvcText}>{tr('manageProducts', activeLanguage === 'fr' ? 'Gérer les produits' : 'Manage products')}</Text></TouchableOpacity> : null}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
+        {activeTab === 'services' && isBeautyBusiness ? (
+          <View style={[styles.beautyAdminPanel, { backgroundColor: themeColors.background, borderColor: themeColors.border }]}>
+            <View style={styles.beautyAdminHeader}>
+              <View style={styles.beautyAdminHeading}>
+                <Text style={[styles.beautyAdminEyebrow, { color: themeColors.pinkSoft }]}>{activeLanguage === 'fr' ? 'BEAUTÉ & MODE' : 'BEAUTY & FASHION'}</Text>
+                <Text style={[styles.beautyAdminTitle, { color: themeColors.text }]}>{tr('beautyServicesTitle', activeLanguage === 'fr' ? 'Prestations beauté' : 'Beauty services')}</Text>
+                <Text style={[styles.beautyAdminMeta, { color: themeColors.muted }]}>{services.length} {tr('serviceCountLabel', 'services')}</Text>
+              </View>
+              {canEdit ? (
+                <TouchableOpacity style={[styles.beautyAddButton, { backgroundColor: themeColors.pink }]} onPress={openAdd} accessibilityRole="button">
+                  <Plus size={16} color="#FFFFFF" />
+                  <Text style={styles.beautyAddButtonText}>{tr('add', 'Ajouter')}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            {navigation.getParent?.()?.getState?.()?.routeNames?.includes('Booking') ? (
+              <TouchableOpacity
+                style={[styles.beautyAgendaButton, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}
+                onPress={() => navigation.getParent()?.navigate('Booking', { companyId })}
+                accessibilityRole="button"
+              >
+                <CalendarDays size={18} color={themeColors.pinkSoft} />
+                <View style={styles.beautyAgendaCopy}>
+                  <Text style={[styles.beautyAgendaTitle, { color: themeColors.text }]}>{tr('beautyAgenda', activeLanguage === 'fr' ? 'Agenda beauté' : 'Beauty calendar')}</Text>
+                  <Text style={[styles.beautyAgendaSubtitle, { color: themeColors.muted }]}>{tr('beautyAgendaHint', activeLanguage === 'fr' ? 'Gérer les rendez-vous de vos prestations' : 'Manage appointments for your services')}</Text>
+                </View>
+                <Text style={[styles.beautyAgendaArrow, { color: themeColors.muted }]}>›</Text>
+              </TouchableOpacity>
+            ) : null}
+
+            {services.length ? services.map((service, index) => (
+              <View key={String(service?._id || `${service?.name || 'beauty-service'}-${index}`)} style={[styles.beautyServiceCard, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}>
+                {service?.image ? (
+                  <Image source={{ uri: imgUrl(service.image) }} style={styles.beautyServiceImage} />
+                ) : (
+                  <View style={[styles.beautyServiceImageFallback, { backgroundColor: themeColors.surfaceRaised }]}><Scissors size={20} color={themeColors.pinkSoft} /></View>
+                )}
+                <View style={styles.beautyServiceCopy}>
+                  <Text style={[styles.beautyServiceName, { color: themeColors.text }]} numberOfLines={2}>{service?.name}</Text>
+                  {service?.description ? <Text style={[styles.beautyServiceDescription, { color: themeColors.muted }]} numberOfLines={2}>{service.description}</Text> : null}
+                  <Text style={[styles.beautyServicePrice, { color: themeColors.pinkSoft }]}>
+                    {Number(service?.price) > 0
+                      ? `$${Number(service.price).toFixed(2)}`
+                      : tr('beautyQuoteLabel', activeLanguage === 'fr' ? 'Sur demande' : 'Price on request')}
+                  </Text>
+                </View>
+                {canEdit ? (
+                  <View style={styles.beautyServiceActions}>
+                    <TouchableOpacity onPress={() => openEdit(service)} accessibilityRole="button" accessibilityLabel={tr('edit', 'Modifier')} style={[styles.beautyIconButton, { backgroundColor: themeColors.surfaceRaised }]}>
+                      <Pencil size={14} color={themeColors.text} />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => deleteService(service._id)} accessibilityRole="button" accessibilityLabel={tr('delete', 'Supprimer')} style={[styles.beautyIconButton, { backgroundColor: themeColors.surfaceRaised }]}>
+                      <Trash2 size={14} color={themeColors.pinkSoft} />
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+              </View>
+            )) : (
+              <View style={[styles.beautyEmptyState, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}>
+                <Scissors size={24} color={themeColors.pinkSoft} />
+                <Text style={[styles.beautyEmptyTitle, { color: themeColors.text }]}>{tr('beautyNoServices', activeLanguage === 'fr' ? 'Aucune prestation beauté pour le moment.' : 'No beauty services yet.')}</Text>
+                {canEdit ? <TouchableOpacity style={[styles.beautyAddButton, { backgroundColor: themeColors.pink }]} onPress={openAdd}><Plus size={16} color="#FFFFFF" /><Text style={styles.beautyAddButtonText}>{tr('beautyAddService', activeLanguage === 'fr' ? 'Ajouter une prestation' : 'Add a service')}</Text></TouchableOpacity> : null}
+              </View>
+            )}
+          </View>
+        ) : null}
+
+        {activeTab === "services" && !isProductCatalogBusiness && !isBeautyBusiness && (
           <View>
             {canEdit && (
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>
-                  {services.length} {tr('serviceCountLabel', 'services')}
+                  {isTechnologyBusiness
+                    ? `${tr('technologyServicesTitle', activeLanguage === 'fr' ? 'Services Technologie et IT' : 'Technology & IT services')} · ${services.length}`
+                    : isBeautyBusiness
+                      ? `${tr('beautyServicesTitle', activeLanguage === 'fr' ? 'Prestations Beaute et Mode' : 'Beauty & Fashion services')} · ${services.length}`
+                      : isHealthBusiness
+                        ? `${tr('healthServicesTitle', activeLanguage === 'fr' ? 'Soins et services medicaux' : 'Health & Medical services')} · ${services.length}`
+                        : isServiceRequestBusiness
+                          ? `${serviceCategoryVisual.label} · ${services.length}`
+                          : `${services.length} ${tr('serviceCountLabel', 'services')}`}
                 </Text>
                 <TouchableOpacity style={styles.addSvcBtn} onPress={openAdd}>
                   <Text style={styles.addSvcText}>+ {tr('add', 'Ajouter')}</Text>
@@ -2035,6 +2168,8 @@ export default function CompanyDetailScreen({ route, navigation }) {
                     navigation.navigate("ServiceDetail", {
                       service: s,
                       companyId: company._id,
+                      businessCategoryId: isTechnologyBusiness ? '1' : isBeautyBusiness ? '3' : isHealthBusiness ? '4' : isServiceRequestBusiness ? serviceRequestCategoryId : primaryCategoryId,
+                      appointmentLocation: company?.location || company?.address || company?.city || '',
                     });
                   }}
                 >
@@ -2044,8 +2179,8 @@ export default function CompanyDetailScreen({ route, navigation }) {
                       style={styles.cardImg}
                     />
                   ) : (
-                    <View style={[styles.cardImg, styles.noImg]}>
-                      <Text style={styles.noImgIcon}>{s.video ? "🎬" : "🛠"}</Text>
+                    <View style={[styles.cardImg, styles.noImg, (isTechnologyBusiness || isBeautyBusiness || isHealthBusiness || isServiceRequestBusiness) && { backgroundColor: serviceCategoryVisual.background }]}>
+                      <Text style={styles.noImgIcon}>{s.video ? "🎬" : isTechnologyBusiness || isBeautyBusiness || isHealthBusiness || isServiceRequestBusiness ? serviceCategoryVisual.icon : "🛠"}</Text>
                     </View>
                   )}
                   {!!s.video && (
@@ -2078,7 +2213,17 @@ export default function CompanyDetailScreen({ route, navigation }) {
                         {s.description}
                       </Text>
                     ) : null}
-                    {Number(s.price) > 0 ? (
+                    {(isTechnologyBusiness || isBeautyBusiness || isHealthBusiness || isServiceRequestBusiness) && Number(s.price || 0) <= 0 ? (
+                      <Text style={styles.servicePrice}>
+                        {isTechnologyBusiness
+                          ? tr('technologyQuoteLabel', activeLanguage === 'fr' ? 'Sur devis' : 'On request')
+                          : isBeautyBusiness
+                            ? tr('beautyQuoteLabel', activeLanguage === 'fr' ? 'Sur demande' : 'Price on request')
+                            : isHealthBusiness
+                              ? tr('healthPriceLabel', activeLanguage === 'fr' ? 'Tarif a confirmer' : 'Price to confirm')
+                              : tr('serviceRequestPriceLabel', activeLanguage === 'fr' ? 'Sur devis' : 'On request')}
+                      </Text>
+                    ) : Number(s.price) > 0 ? (
                       <Text style={styles.servicePrice}>
                         ${Number(s.price).toFixed(2)}
                       </Text>
@@ -2088,9 +2233,17 @@ export default function CompanyDetailScreen({ route, navigation }) {
               ))}
               {services.length === 0 && (
                 <View style={styles.emptyState}>
-                  <Text style={styles.emptyIcon}>🛠</Text>
+                  <Text style={styles.emptyIcon}>{isTechnologyBusiness || isBeautyBusiness || isHealthBusiness || isServiceRequestBusiness ? serviceCategoryVisual.icon : '🛠'}</Text>
                   <Text style={styles.emptyText}>
-                    {tr('noServiceAddHint', 'No service. Tap + Add.')}
+                    {isTechnologyBusiness
+                      ? tr('technologyNoServices', activeLanguage === 'fr' ? 'Les services informatiques apparaitront ici une fois ajoutes.' : 'IT services will appear here once they are added.')
+                      : isBeautyBusiness
+                        ? tr('beautyNoServices', activeLanguage === 'fr' ? 'Les prestations beaute et mode apparaitront ici une fois ajoutees.' : 'Beauty and fashion services will appear here once they are added.')
+                        : isHealthBusiness
+                          ? tr('healthNoServices', activeLanguage === 'fr' ? 'Les prestations de sante apparaitront ici une fois ajoutees.' : 'Health services will appear here once they are added.')
+                          : isServiceRequestBusiness
+                            ? tr('serviceRequestNoServices', activeLanguage === 'fr' ? 'Les prestations de cette categorie apparaitront ici une fois ajoutees.' : 'Services in this category will appear here once they are added.')
+                            : tr('noServiceAddHint', 'No service. Tap + Add.')}
                   </Text>
                 </View>
               )}
@@ -2099,7 +2252,7 @@ export default function CompanyDetailScreen({ route, navigation }) {
         )}
 
         {/* GALLERY */}
-        {activeTab === "gallery" && (
+        {activeTab === "gallery" && !isBeautyBusiness && (
           <View>
             {canEdit && (
               <View style={styles.sectionHeader}>
@@ -2532,7 +2685,15 @@ export default function CompanyDetailScreen({ route, navigation }) {
               />
 
               <TextInput
-                placeholder={tr('serviceNamePlaceholder', 'Nom du service')}
+                placeholder={isTechnologyBusiness
+                  ? tr('technologyServiceNamePlaceholder', activeLanguage === 'fr' ? 'Nom de la prestation ou solution IT' : 'IT service or solution name')
+                  : isBeautyBusiness
+                    ? tr('beautyServiceNamePlaceholder', activeLanguage === 'fr' ? 'Nom de la prestation beaute ou mode' : 'Beauty or fashion service name')
+                    : isHealthBusiness
+                      ? tr('healthServiceNamePlaceholder', activeLanguage === 'fr' ? 'Nom du service ou de la consultation' : 'Service or consultation name')
+                      : isServiceRequestBusiness
+                        ? tr('serviceRequestNamePlaceholder', activeLanguage === 'fr' ? 'Nom du service ou de la prestation' : 'Service or offering name')
+                        : tr('serviceNamePlaceholder', 'Nom du service')}
                 placeholderTextColor="#aaa"
                 value={svcName}
                 onChangeText={setSvcName}
@@ -2544,7 +2705,11 @@ export default function CompanyDetailScreen({ route, navigation }) {
               
               <TextInput
                 ref={priceRef}
-                placeholder={tr('pricePlaceholderSimple', 'Price (e.g. 12.00)')}
+                placeholder={isTechnologyBusiness
+                  ? tr('technologyPricePlaceholder', activeLanguage === 'fr' ? 'Tarif (laisser vide pour un devis)' : 'Price (leave blank for a quote)')
+                  : isHealthBusiness
+                    ? tr('healthPricePlaceholder', activeLanguage === 'fr' ? 'Prix de la consultation (0 si a confirmer)' : 'Consultation price (0 if to be confirmed)')
+                    : tr('pricePlaceholderSimple', 'Price (e.g. 12.00)')}
                 placeholderTextColor="#aaa"
                 value={svcPrice}
                 onChangeText={setSvcPrice}
@@ -2555,9 +2720,40 @@ export default function CompanyDetailScreen({ route, navigation }) {
                 blurOnSubmit={false}
               />
 
+              {isBeautyBusiness ? (
+                <View style={styles.serviceCategoryField}>
+                  <Text style={styles.serviceCategoryLabel}>{activeLanguage === 'fr' ? 'Catégorie de la prestation' : 'Service category'}</Text>
+                  <View style={styles.serviceCategoryChoices}>
+                    {beautyServiceCategories.map((category) => {
+                      const selected = svcCategoryId === category.id;
+                      const label = activeLanguage === 'fr' ? (category.fr || category.en) : (category.en || category.fr);
+                      return (
+                        <TouchableOpacity
+                          key={category.id}
+                          style={[styles.serviceCategoryChip, selected && styles.serviceCategoryChipSelected]}
+                          onPress={() => setSvcCategoryId(category.id)}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected }}
+                        >
+                          <Text style={[styles.serviceCategoryChipText, selected && styles.serviceCategoryChipTextSelected]}>{label}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              ) : null}
+
               <TextInput
                 ref={descriptionRef}
-                placeholder={tr('serviceDescriptionOptional', 'Service description (optional)')}
+                placeholder={isTechnologyBusiness
+                  ? tr('technologyDescriptionPlaceholder', activeLanguage === 'fr' ? 'Precisez le besoin, les plateformes, les livrables et le support.' : 'Describe the need, platforms, deliverables and support.')
+                  : isBeautyBusiness
+                    ? tr('beautyDescriptionPlaceholder', activeLanguage === 'fr' ? 'Precisez le type de prestation, les options et les marques concernees.' : 'Describe the service, options and relevant brands.')
+                    : isHealthBusiness
+                      ? tr('healthDescriptionPlaceholder', activeLanguage === 'fr' ? 'Decrivez le service, la specialite et les modalites. N’ajoutez pas de donnees medicales personnelles.' : 'Describe the service, specialty and appointment details. Do not include personal health information.')
+                      : isServiceRequestBusiness
+                        ? tr('serviceRequestDescriptionPlaceholder', activeLanguage === 'fr' ? 'Precisez le contenu, les modalites et ce qui est inclus.' : 'Describe what is included and how the service works.')
+                        : tr('serviceDescriptionOptional', 'Service description (optional)')}
                 placeholderTextColor="#aaa"
                 value={svcDescription}
                 onChangeText={setSvcDescription}
@@ -2643,6 +2839,8 @@ const styles = StyleSheet.create({
       android: { elevation: 8 },
     }),
   },
+  beautyHeaderOverlay: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 30, backgroundColor: 'transparent', paddingBottom: 0, borderBottomLeftRadius: 0, borderBottomRightRadius: 0, shadowOpacity: 0, elevation: 0 },
+  beautyHeaderIconBtn: { backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 20 },
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -3132,10 +3330,20 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     gap: 10,
   },
-  restaurantTab: { backgroundColor: '#19151D', borderColor: '#302B35', borderRadius: 10 },
-  restaurantTabActive: { backgroundColor: '#EF476F', borderColor: '#EF476F' },
-  restaurantTabText: { color: '#A8A1AA' },
-  restaurantTabTextActive: { color: '#FFFFFF' },
+  restaurantTabRow: { flexWrap: 'wrap', gap: 8 },
+  restaurantTab: {
+    flex: 0,
+    width: '48%',
+    minHeight: 50,
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  restaurantTabText: { color: '#A8A1AA', fontSize: 12, paddingHorizontal: 0, fontWeight: '700', flexShrink: 1 },
   tab: {
     flex: 1,
     paddingVertical: 12,
@@ -3160,11 +3368,35 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { fontSize: 16, fontWeight: "700", color: "#333" },
   restaurantMenuSection: { marginHorizontal: 14, marginBottom: 36, padding: 16, borderRadius: 16, backgroundColor: '#100D13', borderWidth: 1, borderColor: '#302B35' },
+  beautyAdminPanel: { marginHorizontal: 14, marginBottom: 36, padding: 16, borderRadius: 14, borderWidth: 1 },
+  beautyAdminHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14 },
+  beautyAdminHeading: { flex: 1 },
+  beautyAdminEyebrow: { fontSize: 9, fontWeight: '800' },
+  beautyAdminTitle: { fontSize: 18, fontWeight: '800', marginTop: 4 },
+  beautyAdminMeta: { fontSize: 11, marginTop: 3 },
+  beautyAddButton: { minHeight: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 12, borderRadius: 9 },
+  beautyAddButtonText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
+  beautyAgendaButton: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, marginBottom: 12, borderRadius: 10, borderWidth: 1 },
+  beautyAgendaCopy: { flex: 1 },
+  beautyAgendaTitle: { fontSize: 12, fontWeight: '800' },
+  beautyAgendaSubtitle: { fontSize: 10, marginTop: 3 },
+  beautyAgendaArrow: { fontSize: 23, lineHeight: 25 },
+  beautyServiceCard: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 92, padding: 10, marginTop: 8, borderRadius: 10, borderWidth: 1 },
+  beautyServiceImage: { width: 68, height: 72, borderRadius: 8, backgroundColor: '#242029' },
+  beautyServiceImageFallback: { width: 68, height: 72, alignItems: 'center', justifyContent: 'center', borderRadius: 8 },
+  beautyServiceCopy: { flex: 1 },
+  beautyServiceName: { fontSize: 12, fontWeight: '800' },
+  beautyServiceDescription: { fontSize: 10, lineHeight: 14, marginTop: 3 },
+  beautyServicePrice: { fontSize: 11, fontWeight: '800', marginTop: 5 },
+  beautyServiceActions: { gap: 6 },
+  beautyIconButton: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center', borderRadius: 8 },
+  beautyEmptyState: { minHeight: 150, alignItems: 'center', justifyContent: 'center', gap: 9, padding: 18, marginTop: 8, borderRadius: 10, borderWidth: 1 },
+  beautyEmptyTitle: { fontSize: 12, fontWeight: '700', textAlign: 'center' },
   restaurantMenuHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 12 },
   restaurantMenuHeading: { flex: 1 },
   restaurantMenuEyebrow: { color: '#FF8298', fontSize: 9, fontWeight: '800', letterSpacing: 1 },
   restaurantMenuTitle: { color: '#F8F5F7', fontSize: 18, fontWeight: '800', marginTop: 4 },
-  restaurantAddButton: { minHeight: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 11, borderRadius: 8, backgroundColor: '#EF476F' },
+  restaurantAddButton: { minHeight: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 11, borderRadius: 8, backgroundColor: '#8B2FC9' },
   restaurantAddButtonText: { color: '#FFFFFF', fontSize: 10, fontWeight: '800' },
   restaurantMenuLoader: { marginVertical: 22 },
   restaurantMenuEmptyState: { alignItems: 'center', paddingVertical: 22, gap: 9 },
@@ -3178,6 +3410,12 @@ const styles = StyleSheet.create({
   restaurantMenuItemMeta: { color: '#A8A1AA', fontSize: 10, marginTop: 4 },
   restaurantMenuUnavailable: { color: '#F2BE6E', fontSize: 9, fontWeight: '700', marginTop: 3 },
   restaurantMenuManage: { color: '#FF8298', fontSize: 10, fontWeight: '800', paddingVertical: 8, paddingLeft: 4 },
+  proFeaturedBanner: { height: 130, marginBottom: 12, borderRadius: 18, overflow: 'hidden', justifyContent: 'flex-end' },
+  proFeaturedImage: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%', resizeMode: 'cover' },
+  proFeaturedScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.22)' },
+  proFeaturedBadge: { position: 'absolute', top: 10, left: 10, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 9 },
+  proFeaturedBadgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '800' },
+  proFeaturedTitle: { color: '#FFFFFF', fontSize: 18, lineHeight: 23, fontWeight: '800', padding: 14, textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6 },
   addSvcBtn: {
     backgroundColor: PURPLE_LIGHT,
     paddingHorizontal: 14,
@@ -3526,6 +3764,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
+
+  serviceCategoryField: { marginBottom: 12 },
+  serviceCategoryLabel: { color: '#4B5563', fontSize: 13, fontWeight: '700', marginBottom: 8 },
+  serviceCategoryChoices: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  serviceCategoryChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 18, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' },
+  serviceCategoryChipSelected: { borderColor: '#F47732', backgroundColor: '#FFF0E6' },
+  serviceCategoryChipText: { color: '#6B7280', fontSize: 12, fontWeight: '700' },
+  serviceCategoryChipTextSelected: { color: '#D95F20' },
 
   input: {
     borderWidth: 1.5,

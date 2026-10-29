@@ -42,6 +42,20 @@ test('restaurant order tips and table numbers carry through to the invoice draft
   assert.match(invoice.notes, /Table A15/);
 });
 
+test('Retail delivery fees are included in the invoice total', () => {
+  const invoice = buildInvoiceInputFromSalesOrder({
+    channel: 'retail_app',
+    orderNumber: 'SO-RETAIL-1',
+    status: 'confirmed',
+    currency: 'USD',
+    deliveryFeeMinor: 850,
+    customer: { name: 'Samira' },
+    lines: [{ productId: 'product-1', productName: 'Bag', quantity: 1, unitPriceMinor: 2500 }],
+  });
+  assert.equal(invoice.totalMinor, 3350);
+  assert.equal(invoice.lines.at(-1).description, 'Delivery');
+});
+
 test('invoice totals use integer minor units and basis-point tax rates', () => {
   const invoice = normalizeInvoiceInput({
     currency: 'xof',

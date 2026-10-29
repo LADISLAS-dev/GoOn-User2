@@ -23,21 +23,26 @@ import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { Share } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import api, { getCompanyById, getPublicRestaurantMenu } from "../services/api";
+import api, { getCompanyById, getPublicRestaurantMenu, getMyDishLikes, toggleDishLike } from "../services/api";
 import { useUser } from "../context/UserContext";
 import AuthPromptModal from "../components/AuthPromptModal";
 import { useLanguage } from "../context/LanguageContext";
+import { useTheme } from "../context/ThemeContext";
 import { auth } from '../services/firebase';
 import { API_URL } from '../env';
 import { isLocalAssetUri, resolveAvatarUri } from "../utils/profileUtils";
 import { isCompanyPubliclyVisible } from '../utils/companyVisibility';
 import { useBusinessTypes } from '../hooks/useBusinessTypes';
+import { getProductCatalogCategoryId, getServiceRequestCategoryId } from '../utils/businessTypes';
 import { CompanyCategoryCover, CompanyCategoryPhotoBadge, getCompanyCategoryVisual } from '../components/CompanyCategoryVisual';
 import PublicRestaurantMenuExperience from '../components/PublicRestaurantMenuExperience';
+import PublicRetailStorefront from '../components/PublicRetailStorefront';
+import BeautyFashionProfileExperience from '../components/BeautyFashionProfileExperience';
 import { LayoutAnimation, UIManager } from "react-native";
 import { Animated } from "react-native";
 import { BlurView } from "expo-blur";
 import { WebView } from "react-native-webview";
+import { ChevronLeft, MoreHorizontal } from 'lucide-react-native';
 
 
 if (Platform.OS === "android") {
@@ -379,6 +384,7 @@ const buildCarouselMediaSource = (rawValue = "") => {
 // ─── main component ───────────────────────────────────────────────────────────
 export default function CompanyDetailScreen({ route, navigation }) {
   const { user, isGuest } = useUser();
+  const { colors: themeColors } = useTheme();
   const [showAuthPrompt, setShowAuthPrompt] = useState(false);
   const { t, activeLanguage } = useLanguage();
   const businessTypes = useBusinessTypes(CATEGORIES, activeLanguage);
@@ -393,6 +399,10 @@ export default function CompanyDetailScreen({ route, navigation }) {
 
   const [company, setCompany] = useState(null);
   const [publicMenu, setPublicMenu] = useState([]);
+  const [likedDishIds, setLikedDishIds] = useState([]);
+  const [dishCategory, setDishCategory] = useState('all');
+  const [dishQuery, setDishQuery] = useState('');
+  const [dishLikeCounts, setDishLikeCounts] = useState({});
   const [publicPaymentOptions, setPublicPaymentOptions] = useState({ stripe: false, paypal: false });
   const [menuLoading, setMenuLoading] = useState(false);
   const [menuError, setMenuError] = useState('');
@@ -434,7 +444,8 @@ export default function CompanyDetailScreen({ route, navigation }) {
   const scrollX = useRef(new Animated.Value(0)).current;
 
   const carouselImages = company?.carouselImages || [];
-  const galleryImages = company?.galleryImages || [];
+  const dishImages = publicMenu.map((dish) => dish?.imageUrl).filter(Boolean);
+  const galleryImages = [...new Set([...(company?.galleryImages || []), ...dishImages])];
   const services = company?.services || [];
   const selectedCategoryLabels = selectedCategoryIds
     .map((id) => {
@@ -445,7 +456,21 @@ export default function CompanyDetailScreen({ route, navigation }) {
     .filter(Boolean);
   const primaryCategoryId = normalizeCompanyCategories(company)[0] || '';
   const isRestaurantBusiness = normalizeCompanyCategories(company).includes('2');
+  const isTechnologyBusiness = normalizeCompanyCategories(company).includes('1');
+  const isBeautyBusiness = normalizeCompanyCategories(company).includes('3')
+    || normalizeCompanyCategories(route?.params?.company).includes('3');
+  const isHealthBusiness = normalizeCompanyCategories(company).includes('4');
+  const productCatalogCategoryId = getProductCatalogCategoryId(normalizeCompanyCategories(company));
+  const isProductCatalogBusiness = !!productCatalogCategoryId;
+  const serviceRequestCategoryId = getServiceRequestCategoryId(normalizeCompanyCategories(company));
+  const isServiceRequestBusiness = !isRestaurantBusiness && !isTechnologyBusiness && !isBeautyBusiness && !isHealthBusiness && !!serviceRequestCategoryId;
   const categoryVisual = getCompanyCategoryVisual(primaryCategoryId, businessTypes, t('categories', 'Business'));
+
+  const serviceCategoryVisual = getCompanyCategoryVisual(
+    isTechnologyBusiness ? '1' : isBeautyBusiness ? '3' : isHealthBusiness ? '4' : isProductCatalogBusiness ? productCatalogCategoryId : isServiceRequestBusiness ? serviceRequestCategoryId : primaryCategoryId,
+    businessTypes,
+    t('categories', 'Business'),
+  );
   useEffect(() => {
     let isCurrent = true;
     if (!isRestaurantBusiness || !companyId) {
@@ -479,9 +504,38 @@ export default function CompanyDetailScreen({ route, navigation }) {
   }, [companyId, isRestaurantBusiness, activeLanguage]);
 
   useEffect(() => {
-    if (isRestaurantBusiness) setActiveTab('menu');
-    else if (activeTab === 'menu') setActiveTab('services');
-  }, [isRestaurantBusiness, activeTab]);
+    if (!isRestaurantBusiness || !companyId || isGuest) {
+      setLikedDishIds([]);
+      return;
+    }
+    let isCurrent = true;
+    getMyDishLikes(companyId)
+      .then((ids) => { if (isCurrent) setLikedDishIds(ids); })
+      .catch(() => {});
+    return () => { isCurrent = false; };
+  }, [companyId, isRestaurantBusiness, isGuest]);
+
+  const handleToggleDishLike = async (dishId) => {
+    if (isGuest) {
+      setShowAuthPrompt(true);
+      return;
+    }
+    try {
+      const result = await toggleDishLike(companyId, dishId);
+      setLikedDishIds((ids) => (
+        result.liked ? [...new Set([...ids, dishId])] : ids.filter((id) => id !== dishId)
+      ));
+      setDishLikeCounts((counts) => ({ ...counts, [dishId]: result.likesCount }));
+    } catch (_) {
+      Alert.alert(t('error', 'Erreur'), t('likeError', "Impossible d'enregistrer votre j'aime."));
+    }
+  };
+
+  useEffect(() => {
+    setActiveTab((currentTab) => (
+      isRestaurantBusiness ? 'menu' : currentTab === 'menu' ? 'services' : currentTab
+    ));
+  }, [isRestaurantBusiness]);
   const ownerId =
     typeof company?.ownerId === "object"
       ? company?.ownerId?._id
@@ -1028,16 +1082,78 @@ export default function CompanyDetailScreen({ route, navigation }) {
     );
   }
 
+  if (isBeautyBusiness) {
+    return (
+      <View style={styles.root}>
+        <StatusBar barStyle="light-content" backgroundColor="#7026B9" />
+        <SafeAreaView style={[styles.header, styles.restaurantHeader]} edges={["top"]}>
+          <View style={styles.headerRow}>
+            <TouchableOpacity
+              style={styles.iconBtn}
+              onPress={() => {
+                if (navigation?.canGoBack?.()) navigation.goBack();
+                else navigation.navigate('UserHome');
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={t('back', 'Back')}
+            >
+              <ChevronLeft size={21} color="#FFFFFF" />
+            </TouchableOpacity>
+            <View style={styles.headerCenter}>
+              <Text style={styles.headerTitle} numberOfLines={1}>{company?.name}</Text>
+            </View>
+            <TouchableOpacity style={styles.iconBtn} onPress={onShare} accessibilityRole="button" accessibilityLabel={t('share', 'Share')}>
+              <Text style={styles.iconText}>⤴</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+        <View style={{ flex: 1 }}>
+          <BeautyFashionProfileExperience
+            company={company}
+            services={services}
+            isFrench={activeLanguage === 'fr'}
+            user={user}
+            onOpenNotifications={() => navigation.navigate('NotificationLabs')}
+            onBookService={(service) => {
+              if (isGuest) {
+                setShowAuthPrompt(true);
+                return;
+              }
+              navigation.navigate('CreateAppointment', {
+                companyId,
+                service,
+                serviceId: service?._id,
+                selectedServiceImage: service?.selectedImage || service?.image || '',
+                companyName: company?.name,
+                beautyFashionBooking: true,
+                appointmentTitlePrefix: t('beautyBookingPrefix', 'Rendez-vous'),
+                defaultAppointmentType: 'in_person',
+                appointmentLocation: company?.location || company?.address || company?.city || '',
+              });
+            }}
+          />
+          <AuthPromptModal
+            visible={showAuthPrompt}
+            onClose={() => setShowAuthPrompt(false)}
+            onSignIn={() => { setShowAuthPrompt(false); navigation.replace('Login'); }}
+            onSignUp={() => { setShowAuthPrompt(false); navigation.replace('Register'); }}
+            featureName="manageBookings"
+          />
+        </View>
+      </View>
+    );
+  }
+
   return (
     <>
-      <View style={[styles.root, isRestaurantBusiness && styles.restaurantRoot]}>
-      <StatusBar barStyle="light-content" backgroundColor={PURPLE} />
+      <View style={[styles.root, isRestaurantBusiness && styles.restaurantRoot, isRestaurantBusiness && { backgroundColor: themeColors.background }]}>
+      <StatusBar barStyle="light-content" backgroundColor={isBeautyBusiness ? 'transparent' : PURPLE} />
 
       {/* HEADER */}
-      <SafeAreaView style={[styles.header, isRestaurantBusiness && styles.restaurantHeader]} edges={["top"]}>
+      <SafeAreaView style={[styles.header, isRestaurantBusiness && styles.restaurantHeader, isRestaurantBusiness && { backgroundColor: themeColors.pink }, isBeautyBusiness && styles.beautyHeaderOverlay]} edges={["top"]}>
         <View style={styles.headerRow}>
           <TouchableOpacity
-            style={styles.iconBtn}
+            style={[styles.iconBtn, isBeautyBusiness && styles.beautyHeaderIconBtn]}
             onPress={() => {
               if (navigation?.canGoBack?.()) {
                 navigation.goBack();
@@ -1047,15 +1163,13 @@ export default function CompanyDetailScreen({ route, navigation }) {
               navigation.navigate('UserHome');
             }}
           >
-            <Text style={styles.iconText}>‹</Text>
+            {isBeautyBusiness ? <ChevronLeft size={21} color="#FFFFFF" /> : <Text style={styles.iconText}>‹</Text>}
           </TouchableOpacity>
           <View style={styles.headerCenter}>
-            <Text style={styles.headerTitle} numberOfLines={1}>
-              {company?.name}
-            </Text>
+            {!isBeautyBusiness ? <Text style={styles.headerTitle} numberOfLines={1}>{company?.name}</Text> : null}
           </View>
-          <TouchableOpacity style={styles.iconBtn} onPress={onShare}>
-            <Text style={styles.iconText}>⤴</Text>
+          <TouchableOpacity style={[styles.iconBtn, isBeautyBusiness && styles.beautyHeaderIconBtn]} onPress={onShare}>
+            {isBeautyBusiness ? <MoreHorizontal size={19} color="#FFFFFF" /> : <Text style={styles.iconText}>⤴</Text>}
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -1074,6 +1188,7 @@ export default function CompanyDetailScreen({ route, navigation }) {
         contentContainerStyle={[styles.scrollContent, isRestaurantBusiness && styles.restaurantScrollContent]}
       >
         {/* CAROUSEL */}
+        {!isRestaurantBusiness && !isBeautyBusiness && (
         <View>
           <View style={styles.carouselLabel}>
             {/* <Text style={styles.carouselLabelText}>{t('photos', 'Photos')}</Text> */}
@@ -1198,10 +1313,12 @@ export default function CompanyDetailScreen({ route, navigation }) {
             </View>
           )} */}
         </View>
+        )}
 
         {/* TABS */}
+        {!isRestaurantBusiness && !isBeautyBusiness && (
         <View style={[styles.tabRow, isRestaurantBusiness && styles.restaurantTabRow]}>
-          {(isRestaurantBusiness ? ['menu', 'services', 'gallery'] : ['services', 'gallery']).map((tab) => (
+          {(isRestaurantBusiness ? ['menu', 'gallery'] : ['services', 'gallery']).map((tab) => (
             <TouchableOpacity
               key={tab}
               style={[
@@ -1237,9 +1354,11 @@ export default function CompanyDetailScreen({ route, navigation }) {
             </TouchableOpacity>
           ))}
         </View>
+        )}
 
         {activeTab === 'menu' && isRestaurantBusiness && (
           <PublicRestaurantMenuExperience
+            locationLabel={company?.location || company?.address || company?.city || ''}
             companyId={companyId}
             items={publicMenu}
             paymentOptions={publicPaymentOptions}
@@ -1249,13 +1368,21 @@ export default function CompanyDetailScreen({ route, navigation }) {
         )}
 
         {/* SERVICES */}
-        {activeTab === "services" && (
+        {activeTab === 'services' && isProductCatalogBusiness ? (
+          <PublicRetailStorefront companyId={companyId} categoryVisual={serviceCategoryVisual} />
+        ) : null}
+
+        {activeTab === "services" && !isProductCatalogBusiness && !isBeautyBusiness && (
           <View>
             <View style={[styles.sectionHeader, isRestaurantBusiness && styles.restaurantSectionHeader]}>
               <Text style={[styles.sectionTitle, isRestaurantBusiness && styles.restaurantSectionTitle]}>
-
-                {/* nombre de services */}
-                {/* {services.length} {t('serviceCountLabel', `service${services.length !== 1 ? 's' : ''}`)} */}
+                {isTechnologyBusiness
+                  ? t('technologyServicesTitle', 'Technology & IT services')
+                  : isBeautyBusiness
+                    ? t('beautyServicesTitle', 'Beauty & Fashion services')
+                    : isHealthBusiness
+                      ? t('healthServicesTitle', 'Health & Medical services')
+                      : isServiceRequestBusiness ? serviceCategoryVisual.label : null}
               </Text>
             </View>
             <View style={[styles.grid, isRestaurantBusiness && styles.restaurantGrid]}>
@@ -1267,8 +1394,8 @@ export default function CompanyDetailScreen({ route, navigation }) {
                       style={styles.cardImg}
                     />
                   ) : (
-                    <View style={[styles.cardImg, styles.noImg, isRestaurantBusiness && styles.restaurantNoImage]}>
-                      <Text style={styles.noImgIcon}>{s.video ? "🎬" : "🛠"}</Text>
+                    <View style={[styles.cardImg, styles.noImg, isRestaurantBusiness && styles.restaurantNoImage, (isTechnologyBusiness || isBeautyBusiness || isHealthBusiness || isServiceRequestBusiness) && { backgroundColor: serviceCategoryVisual.background }]}>
+                      <Text style={styles.noImgIcon}>{s.video ? "🎬" : isTechnologyBusiness || isBeautyBusiness || isHealthBusiness || isServiceRequestBusiness ? serviceCategoryVisual.icon : "🛠"}</Text>
                     </View>
                   )}
                   {!!s.video && (
@@ -1285,6 +1412,8 @@ export default function CompanyDetailScreen({ route, navigation }) {
                         navigation.navigate("ServiceDetail", {
                           service: s,
                           companyId: company._id,
+                          businessCategoryId: isTechnologyBusiness ? '1' : isBeautyBusiness ? '3' : isHealthBusiness ? '4' : isServiceRequestBusiness ? serviceRequestCategoryId : primaryCategoryId,
+                          appointmentLocation: company?.location || company?.address || company?.city || '',
                         });
                       }
                     }}
@@ -1295,16 +1424,30 @@ export default function CompanyDetailScreen({ route, navigation }) {
                       {s.name}
                     </Text>
                     <Text style={styles.servicePrice}>
-                      ${Number(s.price).toFixed(2)}
+                      {(isTechnologyBusiness || isBeautyBusiness || isHealthBusiness || isServiceRequestBusiness) && Number(s.price || 0) <= 0
+                        ? isTechnologyBusiness
+                          ? t('technologyQuoteLabel', 'On request')
+                          : isBeautyBusiness
+                            ? t('beautyQuoteLabel', 'Price on request')
+                            : isHealthBusiness ? t('healthPriceLabel', 'Price to confirm') : t('serviceRequestPriceLabel', 'On request')
+                        : `$${Number(s.price).toFixed(2)}`}
                     </Text>
                   </BlurView>
                 </View>
               ))}
               {services.length === 0 && (
                 <View style={[styles.emptyState, isRestaurantBusiness && styles.restaurantEmptyState]}>
-                  <Text style={styles.emptyIcon}>🛠</Text>
+                  <Text style={styles.emptyIcon}>{isTechnologyBusiness || isBeautyBusiness || isHealthBusiness || isServiceRequestBusiness ? serviceCategoryVisual.icon : '🛠'}</Text>
                   <Text style={[styles.emptyText, isRestaurantBusiness && styles.restaurantEmptyText]}>
-                    {t('noServiceAddHint', 'No service available.')}
+                    {isTechnologyBusiness
+                      ? t('technologyNoServices', 'IT services will appear here once they are added.')
+                      : isBeautyBusiness
+                        ? t('beautyNoServices', 'Beauty and fashion services will appear here once they are added.')
+                        : isHealthBusiness
+                          ? t('healthNoServices', 'Health services will appear here once they are added.')
+                          : isServiceRequestBusiness
+                            ? t('serviceRequestNoServices', 'Services in this category will appear here once they are added.')
+                            : t('noServiceAddHint', 'No service available.')}
                   </Text>
                 </View>
               )}
@@ -1313,16 +1456,19 @@ export default function CompanyDetailScreen({ route, navigation }) {
         )}
 
         {/* GALLERY */}
-        {activeTab === "gallery" && (
+        {activeTab === "gallery" && !isBeautyBusiness && (
           <View>
-            <View style={[styles.sectionHeader, isRestaurantBusiness && styles.restaurantSectionHeader]}>
-              <Text style={[styles.sectionTitle, isRestaurantBusiness && styles.restaurantSectionTitle]}>
+            {!isRestaurantBusiness && (
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>
                 {galleryImages.length} {galleryImages.length === 1
                   ? t('photo', 'Photo')
                   : t('photos', 'Photos')}
               </Text>
             </View>
-            <View style={[styles.galleryGrid, isRestaurantBusiness && styles.restaurantGalleryGrid]}>
+            )}
+            {!isRestaurantBusiness && (
+            <View style={styles.galleryGrid}>
               {galleryImages.map((uri, i) => (
                 <View key={i} style={styles.galleryItemWrapper}>
                   <TouchableOpacity activeOpacity={0.92} onPress={() => openGalleryViewer(i)}>
@@ -1342,6 +1488,85 @@ export default function CompanyDetailScreen({ route, navigation }) {
                 </View>
               )}
             </View>
+            )}
+            {isRestaurantBusiness && !menuLoading && publicMenu.length === 0 && (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyIcon}>🍽️</Text>
+                <Text style={[styles.emptyText, styles.restaurantEmptyText]}>
+                  {t('noDishAvailable', 'Aucun plat disponible.')}
+                </Text>
+              </View>
+            )}
+            {isRestaurantBusiness && publicMenu.length > 0 && (
+              <View style={styles.dishList}>
+                <TextInput
+                  value={dishQuery}
+                  onChangeText={setDishQuery}
+                  placeholder={t('searchDish', 'Rechercher un plat')}
+                  placeholderTextColor="#8e8e93"
+                  style={styles.dishSearch}
+                />
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.dishFilterRow}>
+                  {['all', ...new Set(publicMenu.map((d) => d.category).filter(Boolean))].map((cat) => (
+                    <TouchableOpacity
+                      key={cat}
+                      style={[styles.dishFilterChip, dishCategory === cat && styles.dishFilterChipActive]}
+                      onPress={() => setDishCategory(cat)}
+                    >
+                      <Text style={styles.dishFilterText}>{cat === 'all' ? t('all', 'Tout') : cat}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+                <View style={styles.dishGrid}>
+                {publicMenu.filter((d) => (
+                  (dishCategory === 'all' || d.category === dishCategory)
+                  && (!dishQuery.trim() || `${d.name || ''} ${d.description || ''}`.toLowerCase().includes(dishQuery.trim().toLowerCase()))
+                )).map((dish) => {
+                  const dishId = String(dish._id);
+                  const liked = likedDishIds.includes(dishId);
+                  const likes = dishLikeCounts[dishId] ?? dish.likesCount ?? 0;
+                  const imageIndex = dish.imageUrl ? galleryImages.indexOf(dish.imageUrl) : -1;
+                  return (
+                    <View key={dishId} style={styles.dishCard}>
+                      <TouchableOpacity
+                        activeOpacity={0.9}
+                        disabled={imageIndex < 0}
+                        onPress={() => openGalleryViewer(imageIndex)}
+                      >
+                        {dish.imageUrl ? (
+                          <Image source={{ uri: imgUrl(dish.imageUrl) }} style={styles.dishCardImg} />
+                        ) : (
+                          <View style={[styles.dishCardImg, styles.noImg]}>
+                            <Text style={styles.noImgIcon}>🍽️</Text>
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                      <View style={styles.dishCardBody}>
+                        <Text style={styles.dishCardName} numberOfLines={2}>{dish.name}</Text>
+                        {!!dish.category && <Text style={styles.dishCardCategory}>{dish.category}</Text>}
+                        {!!dish.description && (
+                          <Text style={styles.dishCardDesc} numberOfLines={3}>{dish.description}</Text>
+                        )}
+                        <View style={styles.dishCardFooter}>
+                          <Text style={styles.dishCardPrice}>
+                            {(Math.round(Number(dish.priceMinor || 0) * (100 - (dish.discountPercent || 0)) / 100) / 100).toFixed(2)} {dish.currency || ''}
+                          </Text>
+                          <TouchableOpacity
+                            style={styles.dishLikeBtn}
+                            onPress={() => handleToggleDishLike(dishId)}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          >
+                            <Text style={styles.dishLikeIcon}>{liked ? '❤️' : '🤍'}</Text>
+                            <Text style={styles.dishLikeCount}>{likes}</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    </View>
+                  );
+                })}
+                </View>
+              </View>
+            )}
           </View>
         )}
 
@@ -1794,6 +2019,8 @@ const styles = StyleSheet.create({
   scrollContent: { paddingBottom: 140 },
   restaurantRoot: { backgroundColor: '#100D13' },
   restaurantHeader: { backgroundColor: '#7026B9', borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
+  beautyHeaderOverlay: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 30, backgroundColor: 'transparent', paddingBottom: 0, borderBottomLeftRadius: 0, borderBottomRightRadius: 0, shadowOpacity: 0, elevation: 0 },
+  beautyHeaderIconBtn: { backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 20 },
   restaurantScrollContent: { paddingBottom: 210 },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
 
@@ -2213,6 +2440,41 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   galleryItemWrapper: { position: "relative" },
+  dishList: { paddingHorizontal: 12, marginTop: 14, gap: 12 },
+  dishFilterRow: { gap: 8 },
+  dishFilterChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 16,
+    backgroundColor: "#1c1c1e",
+  },
+  dishFilterChipActive: { backgroundColor: "#ff3b5c" },
+  dishFilterText: { color: "#fff", fontSize: 13, fontWeight: "600" },
+  dishCard: {
+    width: "48.5%",
+    backgroundColor: "#1c1c1e",
+    borderRadius: 18,
+    overflow: "hidden",
+  },
+  dishCardImg: { width: "100%", height: 130, resizeMode: "cover" },
+  dishCardBody: { padding: 10, gap: 4 },
+  dishSearch: {
+    height: 44,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    backgroundColor: "#1c1c1e",
+    color: "#fff",
+    fontSize: 14,
+  },
+  dishGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", rowGap: 12 },
+  dishCardName: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  dishCardCategory: { color: "#aaa", fontSize: 11, marginTop: 2 },
+  dishCardDesc: { color: "#ccc", fontSize: 12, marginTop: 4 },
+  dishCardFooter: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 6 },
+  dishCardPrice: { color: "#ff3b5c", fontSize: 15, fontWeight: "800" },
+  dishLikeBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
+  dishLikeIcon: { fontSize: 18 },
+  dishLikeCount: { color: "#fff", fontSize: 13, fontWeight: "600" },
   galleryImg: {
     width: (width - 36) / 3,
     height: (width - 36) / 3,

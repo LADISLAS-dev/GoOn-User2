@@ -208,6 +208,26 @@ router.post('/', authMiddleware, async (req, res) => {
     return res.status(404).json({ error: 'Company not found' });
   }
 
+  if (req.body?.serviceId) {
+    const service = company.services.id(String(req.body.serviceId));
+    if (!service) return res.status(404).json({ error: 'Service not found for this company' });
+    const serviceImages = [
+      ...(Array.isArray(service.images) ? service.images : []),
+      service.image,
+    ].map((image) => String(image || '').trim()).filter(Boolean);
+    const selectedImage = String(req.body.selectedServiceImage || '').trim();
+    if (selectedImage && !serviceImages.includes(selectedImage)) {
+      return res.status(400).json({ error: 'Selected image does not belong to this service' });
+    }
+    req.body.serviceSelection = {
+      serviceId: String(service._id),
+      name: String(service.name || ''),
+      categoryId: String(service.categoryId || ''),
+      price: Number.isFinite(Number(service.price)) ? Number(service.price) : null,
+      selectedImage,
+    };
+  }
+
   const isOwner = String(company.ownerId) === String(currentUser._id);
   const ownerUser = await User.findById(company.ownerId);
 

@@ -26,6 +26,9 @@ import {
   uploadProductImage,
   updateProduct,
 } from '../services/api';
+import { dishBadges, unitPrice } from '../utils/dishPricing';
+import { convertMinor, currencyScale as rateScale, loadRates } from '../utils/currency';
+import CurrencyPickerModal from '../components/CurrencyPickerModal';
 
 const COLORS = {
   background: '#F7F5F1',
@@ -41,8 +44,12 @@ const COLORS = {
 
 const EMPTY_PRODUCT = {
   name: '', sku: '', description: '', category: '', price: '', currency: 'XOF', reorderPoint: '0', imageUrl: '', isAvailable: true,
+  badge: '', discountPercent: '0', prepTimeMinutes: '0', calories: '0',
+  isFeatured: false,
+  tags: [], allergens: [], bulkMinQuantity: '0', bulkDiscountPercent: '0',
 };
 const MOVEMENT_REASONS = ['restock', 'sale', 'return', 'damage', 'adjustment'];
+const formSectionTitle = { color: '#F8F5F7', fontSize: 13, fontWeight: '700', marginTop: 10, marginBottom: 6 };
 
 function currencyScale(currency) {
   try {
@@ -87,6 +94,19 @@ export default function ProInventoryScreen({ companyId, restaurantMode = false }
   const [productModalVisible, setProductModalVisible] = useState(false);
   const [editingProductId, setEditingProductId] = useState(null);
   const [form, setForm] = useState(EMPTY_PRODUCT);
+  const [currencyPickerVisible, setCurrencyPickerVisible] = useState(false);
+
+  const changeProductCurrency = async (next) => {
+    const previous = form.currency;
+    const amount = Number(String(form.price).replace(',', '.'));
+    let price = form.price;
+    if (next && previous && next !== previous && Number.isFinite(amount) && amount > 0) {
+      const rates = await loadRates();
+      const converted = convertMinor(Math.round(amount * rateScale(previous)), previous, next, rates);
+      if (converted !== null) price = String(converted / rateScale(next));
+    }
+    setForm((current) => ({ ...current, currency: next, price }));
+  };
   const [localMenuImage, setLocalMenuImage] = useState(null);
   const [stockProduct, setStockProduct] = useState(null);
   const [stockDelta, setStockDelta] = useState('');
@@ -150,7 +170,7 @@ export default function ProInventoryScreen({ companyId, restaurantMode = false }
         category: isFrench ? 'Section du menu' : 'Menu section',
         description: isFrench ? 'Description et ingrédients' : 'Description and ingredients',
         price: isFrench ? 'Prix à la carte' : 'Menu price',
-        reorderPoint: isFrench ? 'Seuil de préparation' : 'Preparation threshold',
+        reorderPoint: isFrench ? 'Seuil d’alerte de stock' : 'Low-stock alert threshold',
         saved: isFrench ? 'Article du menu enregistré.' : 'Menu item saved.',
         archived: isFrench ? 'Article retiré du menu.' : 'Menu item removed.',
         low: isFrench ? 'À préparer' : 'Prepare more',
@@ -231,6 +251,15 @@ export default function ProInventoryScreen({ companyId, restaurantMode = false }
       reorderPoint: String(product.reorderPoint || 0),
       imageUrl: product.imageUrl || '',
       isAvailable: product.isAvailable !== false,
+      badge: product.badge || '',
+      discountPercent: String(product.discountPercent || 0),
+      prepTimeMinutes: String(product.prepTimeMinutes || 0),
+      calories: String(product.calories || 0),
+      isFeatured: Boolean(product.isFeatured),
+      tags: product.tags || [],
+      allergens: product.allergens || [],
+      bulkMinQuantity: String(product.bulkMinQuantity || 0),
+      bulkDiscountPercent: String(product.bulkDiscountPercent || 0),
     });
     setLocalMenuImage(null);
     setProductModalVisible(true);
@@ -298,6 +327,17 @@ export default function ProInventoryScreen({ companyId, restaurantMode = false }
       priceMinor: Math.round(amount * scale),
       currency: form.currency.trim().toUpperCase(),
       reorderPoint: Number(form.reorderPoint || 0),
+      ...(restaurantMode ? {
+        badge: form.badge || '',
+        discountPercent: Number(form.discountPercent || 0),
+        prepTimeMinutes: Number(form.prepTimeMinutes || 0),
+        calories: Number(form.calories || 0),
+        isFeatured: Boolean(form.isFeatured),
+        tags: form.tags,
+        allergens: form.allergens,
+        bulkMinQuantity: Number(form.bulkMinQuantity || 0),
+        bulkDiscountPercent: Number(form.bulkDiscountPercent || 0),
+      } : {}),
     };
 
     try {
@@ -389,7 +429,15 @@ export default function ProInventoryScreen({ companyId, restaurantMode = false }
           {restaurantMode && item.description ? (
             <Text style={restaurantStyles.productDescription} numberOfLines={2}>{item.description}</Text>
           ) : null}
-          <Text style={[styles.priceText, restaurantMode && restaurantStyles.priceText]}>{formatPrice(item.priceMinor, item.currency, locale)}</Text>
+          <Text style={[styles.priceText, restaurantMode && restaurantStyles.priceText]}>
+            {formatPrice(unitPrice(item), item.currency, locale)}
+            {item.discountPercent > 0 ? `  (${formatPrice(item.priceMinor, item.currency, locale)} -${item.discountPercent}%)` : ''}
+          </Text>
+          {restaurantMode && dishBadges(item, { new: isFrench ? 'Nouveau' : 'New', limited: isFrench ? 'Offre limitée' : 'Limited offer' }).length ? (
+            <Text style={restaurantStyles.productMeta} numberOfLines={1}>
+              {dishBadges(item, { new: isFrench ? 'Nouveau' : 'New', limited: isFrench ? 'Offre limitée' : 'Limited offer' }).join(' · ')}
+            </Text>
+          ) : null}
           <Text style={[styles.stockText, restaurantMode && restaurantStyles.stockText, isLow && styles.stockLow]}>
             {copy.stock}: {item.stockOnHand} · {copy.reorder}: {item.reorderPoint}{isLow ? ` · ${copy.low}` : ''}
           </Text>
@@ -529,12 +577,69 @@ export default function ProInventoryScreen({ companyId, restaurantMode = false }
               <TextInput style={[styles.input, restaurantMode && restaurantStyles.input]} placeholder={copy.name} placeholderTextColor={restaurantMode ? '#81798C' : undefined} value={form.name} onChangeText={(name) => setForm((current) => ({ ...current, name }))} maxLength={120} />
               <TextInput style={[styles.input, restaurantMode && restaurantStyles.input]} placeholder={copy.sku} placeholderTextColor={restaurantMode ? '#81798C' : undefined} value={form.sku} onChangeText={(sku) => setForm((current) => ({ ...current, sku }))} autoCapitalize="characters" maxLength={64} />
               <TextInput style={[styles.input, restaurantMode && restaurantStyles.input]} placeholder={copy.category} placeholderTextColor={restaurantMode ? '#81798C' : undefined} value={form.category} onChangeText={(category) => setForm((current) => ({ ...current, category }))} maxLength={80} />
-              <TextInput style={[styles.input, restaurantMode && restaurantStyles.input]} placeholder={copy.price} placeholderTextColor={restaurantMode ? '#81798C' : undefined} value={form.price} onChangeText={(price) => setForm((current) => ({ ...current, price }))} keyboardType="decimal-pad" />
               <View style={styles.inlineInputs}>
-                <TextInput style={[styles.input, restaurantMode && restaurantStyles.input, styles.currencyInput]} placeholder={copy.currency} placeholderTextColor={restaurantMode ? '#81798C' : undefined} value={form.currency} onChangeText={(currency) => setForm((current) => ({ ...current, currency }))} autoCapitalize="characters" maxLength={3} />
-                <TextInput style={[styles.input, restaurantMode && restaurantStyles.input, styles.thresholdInput]} placeholder={copy.reorderPoint} placeholderTextColor={restaurantMode ? '#81798C' : undefined} value={form.reorderPoint} onChangeText={(reorderPoint) => setForm((current) => ({ ...current, reorderPoint }))} keyboardType="number-pad" />
+                <TextInput style={[styles.input, restaurantMode && restaurantStyles.input, { flex: 1 }]} placeholder={copy.price} placeholderTextColor={restaurantMode ? '#81798C' : undefined} value={form.price} onChangeText={(price) => setForm((current) => ({ ...current, price }))} keyboardType="decimal-pad" />
+                <TouchableOpacity style={[styles.input, restaurantMode && restaurantStyles.input, styles.currencyInput, { justifyContent: 'center' }]} onPress={() => setCurrencyPickerVisible(true)} accessibilityRole="button">
+                  <Text style={{ color: restaurantMode ? '#F8F5F7' : '#111', fontWeight: '700' }}>{form.currency || copy.currency} ▾</Text>
+                </TouchableOpacity>
+                <CurrencyPickerModal
+                  visible={currencyPickerVisible}
+                  onClose={() => setCurrencyPickerVisible(false)}
+                  onSelect={changeProductCurrency}
+                  selected={form.currency}
+                  locale={isFrench ? 'fr' : 'en'}
+                  title={isFrench ? 'Choisir la devise' : 'Choose currency'}
+                  searchPlaceholder={isFrench ? 'Rechercher une devise' : 'Search currency'}
+                />
               </View>
               <TextInput style={[styles.input, restaurantMode && restaurantStyles.input, styles.descriptionInput]} placeholder={copy.description} placeholderTextColor={restaurantMode ? '#81798C' : undefined} value={form.description} onChangeText={(description) => setForm((current) => ({ ...current, description }))} multiline maxLength={2000} textAlignVertical="top" />
+              {restaurantMode ? (
+                <>
+                  <Text style={formSectionTitle}>{isFrench ? 'Mise en avant' : 'Highlight'}</Text>
+                  <View style={[styles.inlineInputs, { alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }]}>
+                    <Text style={{ color: '#F8F5F7', fontSize: 13, flex: 1 }}>{isFrench ? 'Plat du chef (bandeau en haut du menu)' : 'Chef’s pick (banner at the top of the menu)'}</Text>
+                    <Switch value={Boolean(form.isFeatured)} onValueChange={(isFeatured) => setForm((current) => ({ ...current, isFeatured }))} />
+                  </View>
+                  <View style={styles.inlineInputs}>
+                    {[['', isFrench ? 'Aucun' : 'None'], ['new', isFrench ? 'Nouveau' : 'New'], ['limited', isFrench ? 'Limité' : 'Limited'], ['offer', isFrench ? 'Offre' : 'Offer']].map(([value, label]) => (
+                      <TouchableOpacity key={value || 'none'} style={[styles.input, restaurantStyles.input, { flex: 1, alignItems: 'center', justifyContent: 'center', opacity: form.badge === value ? 1 : 0.5 }]} onPress={() => setForm((current) => ({ ...current, badge: value }))}>
+                        <Text style={{ color: '#F8F5F7', fontSize: 12 }}>{label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <Text style={formSectionTitle}>{isFrench ? 'Promotions' : 'Promotions'}</Text>
+                  <View style={styles.inlineInputs}>
+                    {[['discountPercent', isFrench ? 'Remise %' : 'Discount %', 2], ['bulkMinQuantity', isFrench ? 'Lot dès (qté)' : 'Bulk from (qty)', 3], ['bulkDiscountPercent', isFrench ? 'Remise lot %' : 'Bulk discount %', 2]].map(([field, label, max]) => (
+                      <View key={field} style={{ flex: 1 }}>
+                        <Text style={{ color: '#A9A1B3', fontSize: 11, marginBottom: 4 }}>{label}</Text>
+                        <TextInput style={[styles.input, restaurantStyles.input]} value={form[field]} onChangeText={(value) => setForm((current) => ({ ...current, [field]: value }))} keyboardType="number-pad" maxLength={max} />
+                      </View>
+                    ))}
+                  </View>
+                  <Text style={formSectionTitle}>{isFrench ? 'Préparation' : 'Preparation'}</Text>
+                  <View style={styles.inlineInputs}>
+                    {[['prepTimeMinutes', isFrench ? 'Temps (min)' : 'Time (min)', 3], ['calories', 'kcal', 5]].map(([field, label, max]) => (
+                      <View key={field} style={{ flex: 1 }}>
+                        <Text style={{ color: '#A9A1B3', fontSize: 11, marginBottom: 4 }}>{label}</Text>
+                        <TextInput style={[styles.input, restaurantStyles.input]} value={form[field]} onChangeText={(value) => setForm((current) => ({ ...current, [field]: value }))} keyboardType="number-pad" maxLength={max} />
+                      </View>
+                    ))}
+                  </View>
+                  <Text style={formSectionTitle}>{isFrench ? 'Régimes et allergènes' : 'Diets and allergens'}</Text>
+                  {[['tags', ['spicy', 'fish', 'vegetarian', 'vegan', 'meat', 'sweet']], ['allergens', ['gluten', 'dairy', 'nuts', 'eggs', 'shellfish', 'fish', 'soy', 'sesame']]].map(([field, options]) => (
+                    <View key={field} style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                      <Text style={{ color: '#A9A1B3', fontSize: 11, width: '100%' }}>{field === 'tags' ? (isFrench ? 'Tags du plat' : 'Dish tags') : (isFrench ? 'Allergènes' : 'Allergens')}</Text>
+                      {options.map((option) => (
+                        <TouchableOpacity key={option} style={[restaurantStyles.input, { paddingHorizontal: 10, paddingVertical: 6, opacity: form[field].includes(option) ? 1 : 0.5 }]} onPress={() => setForm((current) => ({ ...current, [field]: current[field].includes(option) ? current[field].filter((entry) => entry !== option) : [...current[field], option] }))}>
+                          <Text style={{ color: '#F8F5F7', fontSize: 12 }}>{option}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  ))}
+                </>
+              ) : null}
+              {restaurantMode ? <Text style={formSectionTitle}>{copy.stock}</Text> : null}
+              <TextInput style={[styles.input, restaurantMode && restaurantStyles.input]} placeholder={copy.reorderPoint} placeholderTextColor={restaurantMode ? '#81798C' : undefined} value={form.reorderPoint} onChangeText={(reorderPoint) => setForm((current) => ({ ...current, reorderPoint }))} keyboardType="number-pad" />
               <TouchableOpacity style={[styles.saveButton, restaurantMode && restaurantStyles.saveButton, isSaving && styles.buttonDisabled]} onPress={saveProduct} disabled={isSaving}>
                 <Text style={styles.saveButtonText}>{isSaving ? '…' : copy.save}</Text>
               </TouchableOpacity>

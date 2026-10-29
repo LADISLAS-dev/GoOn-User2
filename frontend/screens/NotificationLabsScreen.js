@@ -70,7 +70,7 @@ function OptionRow({ label, hint, value, onChange, disabled = false }) {
 
 export default function NotificationLabsScreen() {
   const { t } = useLanguage();
-  const { user } = useUser();
+  const { user, isAuthenticated } = useUser();
 
   const [prefs, setPrefs] = useState(DEFAULT_NOTIFICATION_PREFERENCES);
   const [loading, setLoading] = useState(true);
@@ -89,10 +89,12 @@ export default function NotificationLabsScreen() {
       const [storedPrefs, permissions, diagnostic] = await Promise.all([
         getNotificationPreferences(),
         Notifications.getPermissionsAsync(),
-        getPushTokenDiagnostic().catch(() => null),
+        isAuthenticated ? getPushTokenDiagnostic().catch(() => null) : Promise.resolve(null),
       ]);
 
-      const remotePrefs = await getNotificationPreferencesApi().catch(() => null);
+      const remotePrefs = isAuthenticated
+        ? await getNotificationPreferencesApi().catch(() => null)
+        : null;
       const effectivePrefs = remotePrefs ? { ...storedPrefs, ...remotePrefs } : storedPrefs;
 
       setPrefs(effectivePrefs);
@@ -105,7 +107,7 @@ export default function NotificationLabsScreen() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     loadState();
@@ -115,14 +117,16 @@ export default function NotificationLabsScreen() {
     setSaving(true);
     try {
       const saved = await saveNotificationPreferences(next);
-      await updateNotificationPreferencesApi(saved).catch(() => null);
+      if (isAuthenticated) {
+        await updateNotificationPreferencesApi(saved).catch(() => null);
+      }
       setPrefs(saved);
       setNotificationDisplayPreferences(saved);
       return saved;
     } finally {
       setSaving(false);
     }
-  }, []);
+  }, [isAuthenticated]);
 
   const handleMasterToggle = useCallback(async (enabled) => {
     const saved = await persist({ ...prefs, masterEnabled: enabled });

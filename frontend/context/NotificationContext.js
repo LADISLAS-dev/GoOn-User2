@@ -32,7 +32,7 @@ import {
 } from '../services/notificationPreferences';
 
 import { useUser } from './UserContext';
-import { navigateToAppointmentDetails, navigateToMessages } from '../navigation/navigationRef';
+import { navigateToAppointmentDetails, navigateToMessages, navigateToMyOrders } from '../navigation/navigationRef';
 
 // ================= STATE =================
 const initialState = {
@@ -82,7 +82,9 @@ export const NotificationProvider = ({ children }) => {
 
     (async () => {
       const localPrefs = await getNotificationPreferences();
-      const remotePrefs = await getNotificationPreferencesApi().catch(() => null);
+      const remotePrefs = isAuthenticated
+        ? await getNotificationPreferencesApi().catch(() => null)
+        : null;
       const prefs = remotePrefs ? { ...localPrefs, ...remotePrefs } : localPrefs;
       if (!mounted) return;
       setNotificationPrefs(prefs);
@@ -92,7 +94,7 @@ export const NotificationProvider = ({ children }) => {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [isAuthenticated]);
 
   const normalizeEntityId = useCallback((value) => {
     return String(value?._id || value?.id || value || '').trim();
@@ -320,6 +322,12 @@ export const NotificationProvider = ({ children }) => {
     if (!data) return;
 
     console.log('CLICK DATA:', data);
+
+    if (data?.type === 'order') {
+      navigateToMyOrders();
+      markOneAsRead(data?.notificationId);
+      return;
+    }
 
     if (data?.type === 'appointment' && data?.appointmentId) {
       navigateToAppointmentDetails(data.appointmentId);

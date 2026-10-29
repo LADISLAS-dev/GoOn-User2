@@ -128,6 +128,26 @@ export const updateMyProfile = async (data) => {
   }
 };
 
+export const getMyPaymentMethods = async () => {
+  const res = await api.get('/payment-methods');
+  return res.data?.data || [];
+};
+
+export const createMyCardSetupLink = async (consent) => {
+  const res = await api.post('/payment-methods/stripe/setup', consent);
+  return res.data?.data;
+};
+
+export const setMyDefaultPaymentMethod = async (paymentMethodId) => {
+  const res = await api.patch(`/payment-methods/stripe/${encodeURIComponent(paymentMethodId)}/default`);
+  return res.data;
+};
+
+export const removeMyPaymentMethod = async (paymentMethodId) => {
+  const res = await api.delete(`/payment-methods/stripe/${encodeURIComponent(paymentMethodId)}`);
+  return res.data;
+};
+
 export const getAllUsers = async () => {
   const res = await api.get('/users');
   return res.data;
@@ -380,15 +400,47 @@ export const getPublicRestaurantMenu = async (companyId, params = {}) => {
   return res.data;
 };
 
+export const getPublicRetailProducts = async (companyId, params = {}) => {
+  const res = await api.get(`/products/public/retail/company/${companyId}`, { params });
+  return res.data;
+};
+
+export const createRetailCheckout = async (companyId, payload) => {
+  const res = await api.post(`/sales-orders/public/retail/company/${companyId}/checkout`, payload);
+  return res.data?.data;
+};
+
+export const updateCompanyDeliveryZones = async (companyId, deliveryZones) => {
+  const res = await api.patch(`/sales-orders/company/${companyId}/delivery-zones`, { deliveryZones });
+  return res.data?.data;
+};
+
+export const getExchangeRates = async () => {
+  const res = await api.get('/exchange-rates');
+  return res.data;
+};
+
+export const getMyDishLikes = async (companyId) => {
+  const res = await api.get(`/products/public/company/${companyId}/my-likes`);
+  return res.data?.data || [];
+};
+
+export const toggleDishLike = async (companyId, productId) => {
+  const res = await api.post(`/products/public/company/${companyId}/${productId}/like`);
+  return res.data;
+};
+
 export const createPublicRestaurantOrder = async (companyId, payload) => {
   const res = await api.post(`/sales-orders/public/company/${companyId}/checkout`, payload);
   return res.data?.data;
 };
 
-export const getRestaurantPaymentAccounts = async (companyId) => {
+export const getCompanyPaymentAccounts = async (companyId) => {
   const res = await api.get(`/payment-accounts/company/${companyId}`);
   return res.data?.data;
 };
+
+export const getRestaurantPaymentAccounts = getCompanyPaymentAccounts;
 
 export const createStripeConnectLink = async (companyId) => {
   const res = await api.post(`/payment-accounts/company/${companyId}/stripe/connect`);
@@ -525,6 +577,16 @@ export const createSalesOrder = async (companyId, payload) => {
 
 export const transitionSalesOrder = async (orderId, action) => {
   const res = await api.post(`/sales-orders/${orderId}/${action}`);
+  return res.data?.data;
+};
+
+export const getMyOrders = async () => {
+  const res = await api.get('/sales-orders/mine');
+  return res.data?.data || [];
+};
+
+export const getMyOrderReceipt = async (orderId) => {
+  const res = await api.get(`/sales-orders/mine/${orderId}/receipt`);
   return res.data?.data;
 };
 

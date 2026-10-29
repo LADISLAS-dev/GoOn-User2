@@ -4,12 +4,36 @@ const Company = require('../models/company');
 const authMiddleware = require('../middleware/authMiddleware');
 const { resolveCompanyAccess } = require('../services/rbacService');
 const {
+  completeStripeOAuth,
   createPaypalOnboarding,
   createStripeOnboarding,
   getPaymentAccountStatus,
 } = require('../services/paymentAccountService');
 
 const router = express.Router();
+
+router.get('/stripe/oauth/callback', async (req, res) => {
+  const returnUrl = String(process.env.STRIPE_CONNECT_RETURN_URL || process.env.ONLINE_PAYMENT_RETURN_URL || '').trim();
+  if (!returnUrl) {
+    return res.status(503).send('Le retour Stripe Connect n’est pas configuré.');
+  }
+
+  try {
+    const result = await completeStripeOAuth({
+      code: typeof req.query.code === 'string' ? req.query.code : '',
+      state: typeof req.query.state === 'string' ? req.query.state : '',
+      error: typeof req.query.error === 'string' ? req.query.error : '',
+    });
+    const destination = new URL(returnUrl);
+    destination.searchParams.set('stripeConnect', result.cancelled ? 'cancelled' : 'success');
+    return res.redirect(destination.toString());
+  } catch (_) {
+    const destination = new URL(returnUrl);
+    destination.searchParams.set('stripeConnect', 'error');
+    return res.redirect(destination.toString());
+  }
+});
+
 router.use(authMiddleware);
 
 async function resolveCompanyOwner(req, res) {
@@ -35,8 +59,8 @@ async function resolveCompanyOwner(req, res) {
     access.company.categoryId,
     access.company.businessTypeId,
   ].map((value) => String(value || '').trim());
-  if (!categories.includes('2')) {
-    res.status(400).json({ error: 'La connexion des paiements est réservée aux restaurants.' });
+  if (!categories.some((categoryId) => ['2', '3'].includes(categoryId))) {
+    res.status(400).json({ error: 'La connexion des paiements est réservée aux restaurants et aux entreprises Beauty & Fashion.' });
     return null;
   }
   return access.company;

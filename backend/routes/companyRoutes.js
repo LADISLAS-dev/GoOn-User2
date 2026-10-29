@@ -19,6 +19,8 @@ const { mediaUpload } = require(path.join(__dirname, '../middleware/upload'));
 const authMiddleware = require('../middleware/authMiddleware');
 const admin = require('../services/firebaseAdmin');
 const { storeUploadedFile } = require('../services/mediaStorage');
+const { normalizeDeliveryZones } = require('../services/deliveryService');
+const { isProductCatalogCategory } = require('../services/productService');
 
 function toAbsoluteMediaUrl(req, url) {
   const raw = String(url || '').trim();
@@ -767,7 +769,7 @@ router.patch('/:id', authMiddleware, async (req, res) => {
     // Vérifier la propriété
     // Ne pas dépendre de populate() ici: si la relation User est incomplète,
     // populate peut masquer ownerId et provoquer des faux "access denied".
-    const company = await Company.findById(id).select('ownerId');
+    const company = await Company.findById(id).select('ownerId categoryId categoryIds businessTypeId');
     if (!company) {
       return res.status(404).json({ error: 'Entreprise non trouvée' });
     }
@@ -792,6 +794,12 @@ router.patch('/:id', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Accès refusé. Seul le propriétaire peut modifier cette entreprise.' });
     }
 
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'deliveryZones')) {
+      if (!isProductCatalogCategory(company)) {
+        return res.status(400).json({ error: 'Les zones de livraison sont réservées aux entreprises du catalogue produits.' });
+      }
+    }
+
     // Construire le payload
     const payload = { ...req.body };
 
@@ -808,8 +816,10 @@ router.patch('/:id', authMiddleware, async (req, res) => {
       'email',
       'website',
       'location',
+      'deliveryZones',
       'categoryId',
       'categoryIds',
+      'beautyServiceCategories',
       'logo',
       'backgroundImage',
       'carouselImages',
@@ -825,6 +835,41 @@ router.patch('/:id', authMiddleware, async (req, res) => {
         filteredPayload[field] = payload[field];
       }
     });
+
+    if (filteredPayload.deliveryZones !== undefined) {
+      try {
+        filteredPayload.deliveryZones = normalizeDeliveryZones(filteredPayload.deliveryZones);
+      } catch (validationError) {
+        return res.status(400).json({ error: validationError.message });
+      }
+    }
+
+    if (filteredPayload.beautyServiceCategories !== undefined) {
+      const companyCategoryIds = [
+        ...(Array.isArray(company.categoryIds) ? company.categoryIds : []),
+        company.categoryId,
+        company.businessTypeId,
+      ].map((value) => String(value || '').trim());
+      if (!companyCategoryIds.includes('3')) {
+        return res.status(400).json({ error: 'Les catégories de prestations sont réservées aux entreprises Beauty & Fashion.' });
+      }
+      if (!Array.isArray(filteredPayload.beautyServiceCategories) || filteredPayload.beautyServiceCategories.length > 12) {
+        return res.status(400).json({ error: 'La liste des catégories de prestations est invalide.' });
+      }
+      const categoryIds = new Set();
+      const normalizedBeautyCategories = [];
+      for (const category of filteredPayload.beautyServiceCategories) {
+        const categoryId = String(category?.id || '').trim();
+        const fr = String(category?.fr || '').trim();
+        const en = String(category?.en || '').trim();
+        if (!/^[a-z0-9_-]{1,36}$/i.test(categoryId) || !fr || !en || fr.length > 36 || en.length > 36 || categoryIds.has(categoryId)) {
+          return res.status(400).json({ error: 'Chaque catégorie doit avoir un identifiant unique et un nom en français et en anglais.' });
+        }
+        categoryIds.add(categoryId);
+        normalizedBeautyCategories.push({ id: categoryId, fr, en });
+      }
+      filteredPayload.beautyServiceCategories = normalizedBeautyCategories;
+    }
 
     // Normalize media arrays to avoid malformed payloads replacing data unexpectedly.
     if (filteredPayload.carouselImages !== undefined) {
@@ -1000,8 +1045,11 @@ router.post('/:id/services', authMiddleware, async (req, res) => {
     }
     const company = owned.company;
 
-    const { name, price, image, video, description } = req.body;
-    company.services.push({ name, price, image, video, description });
+    const { name, price, image, images, video, description, categoryId } = req.body;
+    const serviceImages = Array.isArray(images) ? images.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 10) : [];
+    const primaryImage = String(image || serviceImages[0] || '').trim();
+    if (primaryImage && !serviceImages.includes(primaryImage)) serviceImages.unshift(primaryImage);
+    company.services.push({ name, price, image: primaryImage, images: serviceImages, video, description, categoryId });
     await company.save();
 
     const newService = company.services[company.services.length - 1];
@@ -1025,12 +1073,22 @@ router.patch('/:id/services/:serviceId', authMiddleware, async (req, res) => {
     const service = company.services.id(req.params.serviceId);
     if (!service) return res.status(404).json({ error: 'Service introuvable' });
 
-    const { name, price, image, video, description } = req.body;
+    const { name, price, image, images, video, description, categoryId } = req.body;
     if (name !== undefined) service.name = name;
     if (price !== undefined) service.price = price;
-    if (image !== undefined) service.image = image;
+    if (images !== undefined) {
+      const serviceImages = Array.isArray(images) ? images.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 10) : [];
+      const primaryImage = String(image !== undefined ? image || '' : service.image || serviceImages[0] || '').trim();
+      if (primaryImage && !serviceImages.includes(primaryImage)) serviceImages.unshift(primaryImage);
+      service.images = serviceImages;
+      service.image = primaryImage || serviceImages[0] || '';
+    } else if (image !== undefined) {
+      service.image = image;
+      if (image && !service.images?.includes(image)) service.images = [image, ...(service.images || [])].slice(0, 10);
+    }
     if (video !== undefined) service.video = video;
     if (description !== undefined) service.description = description;
+    if (categoryId !== undefined) service.categoryId = String(categoryId || '').trim();
 
     await company.save();
     res.json(service);

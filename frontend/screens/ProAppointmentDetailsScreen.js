@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useMemo } from 'react';
 import {
   View,
   Text,
+  Image,
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
@@ -760,6 +761,23 @@ export default function AppointmentDetailsScreen({ route, navigation }) {
             <Text style={styles.heroMetaText}>{typeCfg.icon}{'  '}{typeCfg.label}</Text>
           </View>
 
+          {data.serviceSelection?.name ? (
+            <>
+              <SectionLabel text={t('requestedService', 'Prestation demandée')} />
+              <Card>
+                <View style={styles.serviceSelectionRow}>
+                  {data.serviceSelection.selectedImage ? <Image source={{ uri: data.serviceSelection.selectedImage }} style={styles.serviceSelectionImage} /> : null}
+                  <View style={styles.serviceSelectionCopy}>
+                    <Text style={styles.serviceSelectionName}>{data.serviceSelection.name}</Text>
+                    {data.serviceSelection.categoryId ? <Text style={styles.serviceSelectionMeta}>{data.serviceSelection.categoryId}</Text> : null}
+                    {Number(data.serviceSelection.price) > 0 ? <Text style={styles.serviceSelectionPrice}>${Number(data.serviceSelection.price).toFixed(2)}</Text> : null}
+                    {data.serviceSelection.selectedImage ? <Text style={styles.serviceSelectionMeta}>{t('selectedServicePhoto', 'Photo choisie par le client')}</Text> : null}
+                  </View>
+                </View>
+              </Card>
+            </>
+          ) : null}
+
           {/* ── Banners de statut final ── */}
           {isCompleted && <CompletedBanner senderName={senderName} />}
 
@@ -1119,6 +1137,12 @@ const styles = StyleSheet.create({
   statusText:   { fontSize: 13, fontWeight: '600' },
   heroTitle:    { fontSize: 22, fontWeight: '700', color: C.textPrimary, textAlign: 'center' },
   heroMetaText: { fontSize: 14, color: C.textSecondary },
+  serviceSelectionRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  serviceSelectionImage: { width: 82, height: 82, borderRadius: 10, backgroundColor: C.grayLight },
+  serviceSelectionCopy: { flex: 1, gap: 4 },
+  serviceSelectionName: { color: C.textPrimary, fontSize: 15, fontWeight: '700' },
+  serviceSelectionMeta: { color: C.textSecondary, fontSize: 12 },
+  serviceSelectionPrice: { color: C.primary, fontSize: 13, fontWeight: '700' },
 
   // Completed banner
   completedBanner: {

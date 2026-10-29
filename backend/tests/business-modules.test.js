@@ -48,16 +48,18 @@ test('explicit company configuration takes precedence over defaults', () => {
   assert.deepEqual(modules, ['company', 'business_info', 'team', 'audit_logs']);
 });
 
-test('restaurant menu module stays enabled even when an old company disabled inventory', () => {
+test('product catalog modules stay enabled even when an old company disabled them', () => {
   const company = {
-    categoryIds: ['2'],
-    enabledModules: [{ key: 'inventory', enabled: false }],
+    categoryIds: ['12'],
+    enabledModules: [{ key: 'inventory', enabled: false }, { key: 'sales_orders', enabled: false }],
   };
   const modules = getCompanyModuleKeys(company);
 
   assert.equal(getCategoryRequiredModuleKeys(company).has('inventory'), true);
+  assert.equal(getCategoryRequiredModuleKeys(company).has('sales_orders'), true);
   assert.equal(modules.includes('inventory'), true);
-  assert.equal(getCategoryRequiredModuleKeys({ categoryId: '15' }).has('inventory'), false);
+  assert.equal(modules.includes('sales_orders'), true);
+  assert.equal(getCategoryRequiredModuleKeys({ categoryId: '2' }).has('inventory'), true);
 });
 
 test('default assignments store stable module keys', () => {

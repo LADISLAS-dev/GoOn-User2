@@ -62,6 +62,12 @@ export function navigateToAppointmentDetails(appointmentId) {
   });
 }
 
+export function navigateToMyOrders() {
+  runOrQueue(() => {
+    navigationRef.navigate('MyOrders');
+  });
+}
+
 export function navigateToMessages(companyId, params = {}) {
   runOrQueue(() => {
     navigationRef.navigate('MainTabs', {

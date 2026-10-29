@@ -1,5 +1,6 @@
 const BusinessModule = require('../models/BusinessModule');
 const { getBusinessTypeModuleKeys } = require('./businessTypeService');
+const PRODUCT_CATALOG_CATEGORY_IDS = new Set(['12', '13', '15', '25', '36']);
 
 const BUSINESS_MODULES = [
   {
@@ -180,7 +181,11 @@ function getCategoryRequiredModuleKeys(company) {
     company?.categoryId,
     company?.businessTypeId,
   ]);
-  return new Set(categoryIds.includes('2') ? ['inventory'] : []);
+  if (categoryIds.includes('2')) return new Set(['inventory']);
+  if (categoryIds.some((id) => PRODUCT_CATALOG_CATEGORY_IDS.has(id))) {
+    return new Set(['inventory', 'sales_orders']);
+  }
+  return new Set();
 }
 
 function getCompanyModuleKeys(company, catalog = BUSINESS_MODULES) {

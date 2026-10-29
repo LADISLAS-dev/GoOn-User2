@@ -8,6 +8,7 @@ import { Text, TouchableOpacity } from 'react-native';
 import { UserProvider } from './context/UserContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { LanguageProvider, LanguageContext } from './context/LanguageContext';
+import { ThemeProvider } from './context/ThemeContext';
 import AppNavigator from './navigation/AppNavigator';
 
 import { navigationRef } from './navigation/navigationRef';
@@ -86,6 +87,7 @@ export default function App() {
 
   return (
     <LanguageProvider>
+      <ThemeProvider>
       <AppErrorBoundary>
         <GestureHandlerRootView style={styles.root}>
           <UserProvider>
@@ -97,6 +99,7 @@ export default function App() {
           </UserProvider>
         </GestureHandlerRootView>
       </AppErrorBoundary>
+      </ThemeProvider>
     </LanguageProvider>
   );
 }

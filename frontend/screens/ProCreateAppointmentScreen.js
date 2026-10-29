@@ -1071,8 +1071,9 @@ export default function CreateAppointmentScreen({ navigation, route }) {
     return filtered;
   }, [users, user?.firebaseUid, user?._id, companyId, companyOwnerId, companyOwnerFallback, ui.autoRecipient, t]);
 
-  const prefTitle = service?.name ? `${ui.reservationPrefix} - ${service.name}` : '';
-  const prefLocation = service?.location || '';
+  const titlePrefix = route?.params?.appointmentTitlePrefix || ui.reservationPrefix;
+  const prefTitle = service?.name ? `${titlePrefix} - ${service.name}` : '';
+  const prefLocation = route?.params?.appointmentLocation || service?.location || '';
   const prefNote = [
     service?.name ? `${ui.serviceLabel}: ${service.name}` : null,
     service?.price ? `${ui.priceLabel}: $${Number(service.price || 0).toFixed(2)}` : null,
@@ -1081,7 +1082,7 @@ export default function CreateAppointmentScreen({ navigation, route }) {
     .filter(Boolean)
     .join('\n\n');
 
-  const [appointmentType, setAppointmentType] = useState('video');
+  const [appointmentType, setAppointmentType] = useState(route?.params?.defaultAppointmentType || 'video');
   const [title, setTitle] = useState(prefTitle);
   const [appointmentDateTime, setAppointmentDateTime] = useState(null);
   const [isDatePickerVisible, setDatePickerVisible] = useState(false);

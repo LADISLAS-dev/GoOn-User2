@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   buildProductFilter,
+  canDisplayPublicRetailCatalog,
   canDisplayPublicRestaurantMenu,
   normalizeProductInput,
   normalizeStockMovement,
@@ -14,6 +15,16 @@ test('public menus are limited to validated restaurant companies', () => {
   assert.equal(canDisplayPublicRestaurantMenu({ categoryId: '2', setupStatus: 'draft' }), false);
   assert.equal(canDisplayPublicRestaurantMenu({ categoryId: '15', setupStatus: 'ready' }), false);
   assert.equal(canDisplayPublicRestaurantMenu(null), false);
+});
+
+test('public product catalogs are limited to validated product-sale categories and exclude restaurants', () => {
+  for (const categoryId of ['12', '13', '15', '25', '36']) {
+    assert.equal(canDisplayPublicRetailCatalog({ categoryId, setupStatus: 'ready' }), true);
+  }
+  assert.equal(canDisplayPublicRetailCatalog({ categoryIds: ['2', '15'], profileValidatedAt: new Date() }), false);
+  assert.equal(canDisplayPublicRetailCatalog({ categoryId: '15', setupStatus: 'draft' }), false);
+  assert.equal(canDisplayPublicRetailCatalog({ categoryId: '2', setupStatus: 'ready' }), false);
+  assert.equal(canDisplayPublicRetailCatalog(null), false);
 });
 
 test('product input normalizes sku and currency while keeping money in minor units', () => {
@@ -68,4 +79,24 @@ test('product search is scoped by company and treats regex characters literally'
   assert.equal(filter.companyId, 'company-id');
   assert.equal(filter.$or[0].name.test('oil.*[5'), true);
   assert.equal(filter.$or[0].name.test('oil-abc5'), false);
+});
+test('dish presentation fields are validated', () => {
+  const dish = normalizeProductInput({ badge: 'new', discountPercent: 20, prepTimeMinutes: 35, calories: 403 }, { partial: true });
+  assert.deepEqual(dish, { badge: 'new', discountPercent: 20, prepTimeMinutes: 35, calories: 403 });
+  assert.throws(() => normalizeProductInput({ badge: 'hot' }, { partial: true }));
+  assert.throws(() => normalizeProductInput({ discountPercent: 95 }, { partial: true }));
+});
+
+test('dish tags, allergens and bulk pricing', () => {
+  const { lineUnitPriceMinor } = require('../services/productService');
+  assert.deepEqual(normalizeProductInput({ tags: ['spicy', 'spicy'], allergens: ['nuts'] }, { partial: true }), { tags: ['spicy'], allergens: ['nuts'] });
+  assert.throws(() => normalizeProductInput({ allergens: ['lead'] }, { partial: true }));
+  const dish = { priceMinor: 1000, discountPercent: 0, bulkMinQuantity: 5, bulkDiscountPercent: 5 };
+  assert.equal(lineUnitPriceMinor(dish, 4), 1000);
+  assert.equal(lineUnitPriceMinor(dish, 5), 950);
+});
+
+test('featured flag must be a boolean', () => {
+  assert.deepEqual(normalizeProductInput({ isFeatured: true }, { partial: true }), { isFeatured: true });
+  assert.throws(() => normalizeProductInput({ isFeatured: 'yes' }, { partial: true }));
 });

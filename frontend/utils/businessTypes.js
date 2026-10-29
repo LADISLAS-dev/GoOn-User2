@@ -1,5 +1,28 @@
 import { getCategoryLabel } from './categoryLabels';
 
+const SERVICE_REQUEST_CATEGORY_IDS = new Set([
+  '5', '16', '17', '18', '23', '26', '28', '31', '32', '33', '34', '35', '37', '38', '39', '40',
+]);
+
+const IN_PERSON_SERVICE_CATEGORY_IDS = new Set(['26', '28', '31', '32', '33', '34', '35']);
+const PRODUCT_CATALOG_CATEGORY_IDS = new Set(['12', '13', '15', '25', '36']);
+
+export function getProductCatalogCategoryId(categoryIds = []) {
+  const ids = (Array.isArray(categoryIds) ? categoryIds : []).map((id) => String(id || '').trim());
+  if (ids.includes('2')) return '';
+  return ids.find((id) => PRODUCT_CATALOG_CATEGORY_IDS.has(id)) || '';
+}
+
+export function getServiceRequestCategoryId(categoryIds = []) {
+  return (Array.isArray(categoryIds) ? categoryIds : [])
+    .map((id) => String(id || '').trim())
+    .find((id) => SERVICE_REQUEST_CATEGORY_IDS.has(id)) || '';
+}
+
+export function isInPersonServiceCategory(categoryId) {
+  return IN_PERSON_SERVICE_CATEGORY_IDS.has(String(categoryId || '').trim());
+}
+
 const MODULE_LABELS = {
   company: { en: 'Company workspace', fr: 'Espace entreprise' },
   business_info: { en: 'Company profile', fr: 'Fiche entreprise' },

@@ -769,6 +769,20 @@ export default function CreateAppointmentScreen({ navigation, route }) {
   };
   const companyId = route?.params?.companyId || route?.params?.service?.companyId;
   const service = route?.params?.service;
+  const isBeautyFashionBooking = route?.params?.beautyFashionBooking === true;
+  const beautyCopy = resolvedCopyLanguage === 'fr'
+    ? {
+        provider: 'Votre professionnel', dateTime: 'Choisir une date et une heure', service: 'Prestation',
+        inPerson: 'Rendez-vous en personne', confirm: 'Envoyer la demande de rendez-vous',
+        serviceStep: 'Prestation', dateStep: 'Date / heure', requestStep: 'Demande',
+        requestDetails: 'Précisez votre demande', location: 'Adresse du rendez-vous',
+      }
+    : {
+        provider: 'Your professional', dateTime: 'Choose a date and time', service: 'Service',
+        inPerson: 'In-person appointment', confirm: 'Send appointment request',
+        serviceStep: 'Service', dateStep: 'Date / time', requestStep: 'Request',
+        requestDetails: 'Add a request note', location: 'Appointment address',
+      };
   const [companyOwnerId, setCompanyOwnerId] = useState('');
   const [companyOwnerFallback, setCompanyOwnerFallback] = useState(null);
 
@@ -864,8 +878,9 @@ export default function CreateAppointmentScreen({ navigation, route }) {
     return filtered;
   }, [users, user?.firebaseUid, user?._id, companyId, companyOwnerId, companyOwnerFallback, copy]);
 
-  const prefTitle = service?.name ? `${copy.reservationPrefix} - ${service.name}` : '';
-  const prefLocation = service?.location || '';
+  const titlePrefix = route?.params?.appointmentTitlePrefix || copy.reservationPrefix;
+  const prefTitle = service?.name ? `${titlePrefix} - ${service.name}` : '';
+  const prefLocation = route?.params?.appointmentLocation || service?.location || '';
   const prefNote = [
     service?.name ? `${copy.servicePrefix}: ${service.name}` : null,
     service?.price ? `${copy.pricePrefix}: $${Number(service.price || 0).toFixed(2)}` : null,
@@ -874,7 +889,7 @@ export default function CreateAppointmentScreen({ navigation, route }) {
     .filter(Boolean)
     .join('\n\n');
 
-  const [appointmentType, setAppointmentType] = useState('video');
+  const [appointmentType, setAppointmentType] = useState(route?.params?.defaultAppointmentType || 'video');
   const [title, setTitle] = useState(prefTitle);
   const [appointmentDateTime, setAppointmentDateTime] = useState(null);
   const [isDatePickerVisible, setDatePickerVisible] = useState(false);
@@ -892,8 +907,8 @@ export default function CreateAppointmentScreen({ navigation, route }) {
 
   useEffect(() => {
     if (!service?.name || titleEdited) return;
-    setTitle(`${copy.reservationPrefix} - ${service.name}`);
-  }, [service?.name, copy.reservationPrefix, titleEdited]);
+    setTitle(`${titlePrefix} - ${service.name}`);
+  }, [service?.name, titlePrefix, titleEdited]);
 
   useEffect(() => {
     if (!service || noteEdited) return;
@@ -1061,6 +1076,8 @@ export default function CreateAppointmentScreen({ navigation, route }) {
 
       await createAppointment({
         companyId,
+        serviceId: route?.params?.serviceId || service?._id,
+        selectedServiceImage: route?.params?.selectedServiceImage || service?.selectedImage || service?.image || '',
         senderId: user._id,
         receiverId: selectedUser._id,
         title,
@@ -1107,10 +1124,10 @@ export default function CreateAppointmentScreen({ navigation, route }) {
         <TouchableOpacity onPress={handleBackToBookings} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           <Text style={styles.navCancel}>{copy.back}</Text>
         </TouchableOpacity>
-        <Text style={styles.navTitle}>{copy.navTitle}</Text>
+        <Text style={styles.navTitle}>{isBeautyFashionBooking ? beautyCopy.service : copy.navTitle}</Text>
         <TouchableOpacity onPress={handleSend} disabled={!isReady || loading} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           <Text style={[styles.navSend, (!isReady || loading) && styles.navSendDisabled]}>
-            {loading ? copy.sending : copy.send}
+            {loading ? copy.sending : isBeautyFashionBooking ? beautyCopy.confirm : copy.send}
           </Text>
         </TouchableOpacity>
       </View>
@@ -1121,25 +1138,47 @@ export default function CreateAppointmentScreen({ navigation, route }) {
         keyboardDismissMode="on-drag"
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.heroCard}>
-          <Text style={styles.heroKicker}>{copy.planning}</Text>
-          <Text style={styles.heroTitle}>{title.trim() || copy.navTitle}</Text>
-          <Text style={styles.heroSub}>{copy.heroSub}</Text>
-          <View style={styles.heroMetaWrap}>
-            <View style={styles.heroMetaChip}>
-              <Text style={styles.heroMetaText}>{selectedTypeLabel}</Text>
+        {isBeautyFashionBooking ? (
+          <>
+            <View style={styles.beautyStepper}>
+              {[
+                { label: beautyCopy.serviceStep, complete: true, active: false },
+                { label: beautyCopy.dateStep, complete: !!appointmentDateTime, active: !appointmentDateTime },
+                { label: beautyCopy.requestStep, complete: false, active: !!appointmentDateTime },
+              ].map((step, index) => (
+                <View key={step.label} style={styles.beautyStep}>
+                  <View style={[styles.beautyStepDot, (step.complete || step.active) && styles.beautyStepDotActive]}>
+                    <Text style={[styles.beautyStepNumber, (step.complete || step.active) && styles.beautyStepNumberActive]}>{step.complete ? '✓' : index + 1}</Text>
+                  </View>
+                  <Text style={[styles.beautyStepLabel, step.active && styles.beautyStepLabelActive]}>{step.label}</Text>
+                </View>
+              ))}
             </View>
-            <View style={styles.heroMetaChip}>
-              <Text style={styles.heroMetaText}>{duration}</Text>
+            <View style={styles.beautyHeroCard}>
+              <Text style={styles.beautyHeroKicker}>{beautyCopy.service}</Text>
+              <Text style={styles.beautyHeroTitle}>{service?.name || title.trim()}</Text>
+              <Text style={styles.beautyHeroSub}>{route?.params?.companyName || selectedUser?.name || ''}</Text>
+              <View style={styles.beautyHeroMeta}>
+                <Text style={styles.beautyHeroChip}>{beautyCopy.inPerson}</Text>
+                {service?.price > 0 ? <Text style={styles.beautyHeroChip}>${Number(service.price).toFixed(2)}</Text> : null}
+              </View>
             </View>
-            <View style={styles.heroMetaChip}>
-              <Text style={styles.heroMetaText}>{appointmentDateTime ? formatDateLabel(appointmentDateTime, resolvedCopyLanguage) : copy.chooseDate}</Text>
+          </>
+        ) : (
+          <View style={styles.heroCard}>
+            <Text style={styles.heroKicker}>{copy.planning}</Text>
+            <Text style={styles.heroTitle}>{title.trim() || copy.navTitle}</Text>
+            <Text style={styles.heroSub}>{copy.heroSub}</Text>
+            <View style={styles.heroMetaWrap}>
+              <View style={styles.heroMetaChip}><Text style={styles.heroMetaText}>{selectedTypeLabel}</Text></View>
+              <View style={styles.heroMetaChip}><Text style={styles.heroMetaText}>{duration}</Text></View>
+              <View style={styles.heroMetaChip}><Text style={styles.heroMetaText}>{appointmentDateTime ? formatDateLabel(appointmentDateTime, resolvedCopyLanguage) : copy.chooseDate}</Text></View>
             </View>
           </View>
-        </View>
+        )}
 
         {/* Destinataire auto */}
-        <SectionLabel text={copy.recipient} />
+        <SectionLabel text={isBeautyFashionBooking ? beautyCopy.provider : copy.recipient} />
         <Card>
           {selectedUser ? (
             <React.Fragment key={selectedUser._id}>
@@ -1162,20 +1201,19 @@ export default function CreateAppointmentScreen({ navigation, route }) {
         )}
 
         {/* Type */}
-        <SectionLabel text={copy.typeSection} />
-        <View style={styles.typeGrid}>
-          {localizedTypes.map(t => (
-            <TypeCard
-              key={t.id}
-              item={t}
-              selected={appointmentType === t.id}
-              onPress={() => setAppointmentType(t.id)}
-            />
-          ))}
-        </View>
+        {!isBeautyFashionBooking ? (
+          <>
+            <SectionLabel text={copy.typeSection} />
+            <View style={styles.typeGrid}>
+              {localizedTypes.map(t => (
+                <TypeCard key={t.id} item={t} selected={appointmentType === t.id} onPress={() => setAppointmentType(t.id)} />
+              ))}
+            </View>
+          </>
+        ) : null}
 
         {/* Date & heure */}
-        <SectionLabel text={copy.dateTimeSection} />
+        <SectionLabel text={isBeautyFashionBooking ? beautyCopy.dateTime : copy.dateTimeSection} />
         <Card>
           <View style={styles.pickerRow}>
             <FieldRow
@@ -1219,7 +1257,7 @@ export default function CreateAppointmentScreen({ navigation, route }) {
         </Card>
 
         {/* Détails */}
-        <SectionLabel text={copy.details} />
+        <SectionLabel text={isBeautyFashionBooking ? beautyCopy.requestDetails : copy.details} />
         <Card>
           <FieldRow
             icon="✏️"
@@ -1233,25 +1271,29 @@ export default function CreateAppointmentScreen({ navigation, route }) {
           <RowSeparator />
           <FieldRow
             icon="📍"
-            placeholder={copy.locationPlaceholder}
+            placeholder={isBeautyFashionBooking ? beautyCopy.location : copy.locationPlaceholder}
             value={location}
             onChangeText={setLocation}
           />
-          <RowSeparator />
-          <View style={styles.fieldRow}>
-            <Text style={styles.fieldIcon}>🚩</Text>
-            <Text style={styles.rowLabel}>{copy.priority}</Text>
-          </View>
-          <View style={styles.priorityRow}>
-            {localizedPriorities.map(p => (
-              <PriorityChip
-                key={p.id}
-                item={p}
-                selected={priority === p.id}
-                onPress={() => setPriority(p.id)}
-              />
-            ))}
-          </View>
+          {!isBeautyFashionBooking ? <RowSeparator /> : null}
+          {!isBeautyFashionBooking ? (
+            <>
+              <View style={styles.fieldRow}>
+                <Text style={styles.fieldIcon}>🚩</Text>
+                <Text style={styles.rowLabel}>{copy.priority}</Text>
+              </View>
+              <View style={styles.priorityRow}>
+                {localizedPriorities.map(p => (
+                  <PriorityChip
+                    key={p.id}
+                    item={p}
+                    selected={priority === p.id}
+                    onPress={() => setPriority(p.id)}
+                  />
+                ))}
+              </View>
+            </>
+          ) : null}
         </Card>
 
         {/* Notes */}
@@ -1270,6 +1312,7 @@ export default function CreateAppointmentScreen({ navigation, route }) {
         </Card>
 
         {/* Options */}
+        {!isBeautyFashionBooking ? <>
         <SectionLabel text={copy.options} />
         <Card>
           <View style={styles.row}>
@@ -1305,6 +1348,7 @@ export default function CreateAppointmentScreen({ navigation, route }) {
             <Text style={styles.chevron}>›</Text>
           </TouchableOpacity>
         </Card>
+        </> : null}
 
         {/* Status hint */}
         {!isReady && (
@@ -1328,7 +1372,7 @@ export default function CreateAppointmentScreen({ navigation, route }) {
           disabled={!isReady || loading}
           activeOpacity={0.85}
         >
-          <Text style={styles.submitBtnText}>{loading ? copy.creating : copy.confirm}</Text>
+          <Text style={styles.submitBtnText}>{loading ? copy.creating : isBeautyFashionBooking ? beautyCopy.confirm : copy.confirm}</Text>
         </TouchableOpacity>
 
         <View style={{ height: 40 }} />
@@ -1392,6 +1436,21 @@ const styles = StyleSheet.create({
   navTitle: { fontSize: 17, fontWeight: '800', color: C.textPrimary },
   navSend: { fontSize: 16, fontWeight: '800', color: C.primary },
   navSendDisabled: { opacity: 0.35 },
+
+  beautyStepper: { flexDirection: 'row', justifyContent: 'space-between', marginHorizontal: 16, marginTop: 16, paddingHorizontal: 8 },
+  beautyStep: { flex: 1, alignItems: 'center', gap: 5 },
+  beautyStepDot: { width: 25, height: 25, alignItems: 'center', justifyContent: 'center', borderRadius: 13, borderWidth: 1, borderColor: '#D8CCC4', backgroundColor: '#FFFFFF' },
+  beautyStepDotActive: { borderColor: '#F47732', backgroundColor: '#F47732' },
+  beautyStepNumber: { color: C.label, fontSize: 10, fontWeight: '800' },
+  beautyStepNumberActive: { color: '#FFFFFF' },
+  beautyStepLabel: { color: C.label, fontSize: 9, textAlign: 'center' },
+  beautyStepLabelActive: { color: '#D85D22', fontWeight: '800' },
+  beautyHeroCard: { marginHorizontal: 16, marginTop: 16, padding: 16, borderRadius: 16, borderWidth: 1, borderColor: '#F3D7C8', backgroundColor: '#FFF8F3' },
+  beautyHeroKicker: { color: '#D85D22', fontSize: 10, fontWeight: '800', textTransform: 'uppercase' },
+  beautyHeroTitle: { color: '#211D1B', fontSize: 18, fontWeight: '800', marginTop: 5 },
+  beautyHeroSub: { color: '#857D78', fontSize: 12, marginTop: 3 },
+  beautyHeroMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 10 },
+  beautyHeroChip: { color: '#A64C25', backgroundColor: '#FCE8DC', borderRadius: 14, paddingHorizontal: 9, paddingVertical: 5, fontSize: 10, fontWeight: '700' },
 
   heroCard: {
     marginHorizontal: 16,

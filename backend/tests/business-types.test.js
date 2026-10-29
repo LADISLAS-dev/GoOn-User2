@@ -51,6 +51,18 @@ test('business type catalog supplies appointment modules by type', () => {
   assert.equal(moduleKeys.includes('sales_orders'), true);
 });
 
+test('service and consultation categories receive appointment management by default', () => {
+  const serviceCategoryIds = ['1', '3', '4', '5', '16', '17', '18', '23', '26', '28', '31', '32', '33', '34', '35', '37', '38', '39', '40'];
+  for (const key of serviceCategoryIds) {
+    const type = BUSINESS_TYPES.find((entry) => entry.key === key);
+    assert.ok(type.moduleKeys.includes('appointments'), `category ${key} should enable appointments`);
+  }
+  for (const key of ['12', '13', '15', '25', '36']) {
+    const type = BUSINESS_TYPES.find((entry) => entry.key === key);
+    assert.equal(type.moduleKeys.includes('appointments'), false, `product category ${key} should not enable appointments`);
+  }
+});
+
 test('retail and warehouse types receive inventory without appointment defaults', () => {
   const keys = collectBusinessTypeModuleKeys(BUSINESS_TYPES.filter((type) => ['15', '19'].includes(type.key)));
   assert.deepEqual(keys, ['inventory', 'invoices', 'sales_orders']);
@@ -61,6 +73,16 @@ test('retail and warehouse types receive inventory without appointment defaults'
   assert.equal(modules.includes('sales_orders'), true);
   assert.equal(modules.includes('appointments'), false);
   assert.equal(modules.includes('sales_orders'), true);
+});
+
+test('all grouped product-sale categories receive inventory, sales orders and invoices', () => {
+  for (const key of ['12', '13', '15', '25', '36']) {
+    const type = BUSINESS_TYPES.find((type) => type.key === key);
+    assert.ok(type.moduleKeys.includes('inventory'), `category ${key} should enable inventory`);
+    assert.ok(type.moduleKeys.includes('sales_orders'), `category ${key} should enable sales orders`);
+    assert.ok(type.moduleKeys.includes('invoices'), `category ${key} should enable invoices`);
+    assert.equal(type.moduleKeys.includes('appointments'), false);
+  }
 });
 
 test('commercial and service domains receive the invoice module by default', () => {

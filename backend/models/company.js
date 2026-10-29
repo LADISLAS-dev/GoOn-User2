@@ -14,10 +14,28 @@ const companySchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+    beautyServiceCategories: {
+      type: [{
+        _id: false,
+        id: { type: String, required: true, trim: true },
+        fr: { type: String, trim: true },
+        en: { type: String, trim: true },
+      }],
+      default: [],
+    },
     logo: String,
     backgroundImage: String,
     latitude: Number,
     longitude: Number,
+    deliveryZones: {
+      type: [{
+        _id: false,
+        maxDistanceKm: { type: Number, min: 0, max: 500, required: true },
+        feeMinor: { type: Number, min: 0, required: true },
+        currency: { type: String, uppercase: true, minlength: 3, maxlength: 3, required: true },
+      }],
+      default: [],
+    },
 
     ownerId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -51,8 +69,10 @@ const companySchema = new mongoose.Schema(
         name: String,
         price: Number,
         image: String,
+        images: { type: [String], default: [] },
         video: String,
         description: String,
+        categoryId: { type: String, trim: true, default: '' },
       },
     ],
 
@@ -77,6 +97,14 @@ const companySchema = new mongoose.Schema(
     paymentAccounts: {
       stripe: {
         accountId: { type: String, default: '', trim: true },
+        mode: { type: String, enum: ['test', 'live'], default: null },
+        accountType: { type: String, enum: ['v2_full', 'express', 'standard', 'custom'], default: 'v2_full' },
+        testAccountId: { type: String, default: '', trim: true },
+        liveAccountId: { type: String, default: '', trim: true },
+        legacyTestAccountId: { type: String, default: '', trim: true },
+        legacyLiveAccountId: { type: String, default: '', trim: true },
+        oauthStateHash: { type: String, default: '', select: false },
+        oauthStateExpiresAt: { type: Date, default: null, select: false },
         detailsSubmitted: { type: Boolean, default: false },
         chargesEnabled: { type: Boolean, default: false },
         payoutsEnabled: { type: Boolean, default: false },

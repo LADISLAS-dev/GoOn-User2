@@ -4,6 +4,7 @@ import {
   Alert,
   FlatList,
   Modal,
+  Platform,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -14,7 +15,9 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useLanguage } from '../context/LanguageContext';
-import { createInvoiceFromSalesOrder, createSalesOrder, getCustomers, getProducts, getSalesOrders, recordSalesOrderPayment, transitionSalesOrder } from '../services/api';
+import { createInvoiceFromSalesOrder, createSalesOrder, getCompanyById, getCustomers, getProducts, getSalesOrders, recordSalesOrderPayment, transitionSalesOrder, updateCompanyDeliveryZones } from '../services/api';
+import { getProductCatalogCategoryId } from '../utils/businessTypes';
+import { unitPrice } from '../utils/dishPricing';
 
 const COLORS = {
   background: '#F7F5F1', surface: '#FFFFFF', border: '#E8E1D7', text: '#17161D',
@@ -72,6 +75,11 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
+  const [deliveryZoneModalVisible, setDeliveryZoneModalVisible] = useState(false);
+  const [deliveryZones, setDeliveryZones] = useState([]);
+  const [deliveryZoneDrafts, setDeliveryZoneDrafts] = useState([]);
+  const [hasDeliveryLocation, setHasDeliveryLocation] = useState(false);
+  const [isRetailCompany, setIsRetailCompany] = useState(false);
   const [customer, setCustomer] = useState(EMPTY_CUSTOMER);
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
   const [notes, setNotes] = useState('');
@@ -99,6 +107,9 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
         cancelBody: 'Si elle est confirmée, les quantités seront remises en stock.',
         fulfilledTitle: 'Marquer la commande comme livrée ?', status: 'Statut', draft: 'Brouillon',
         confirmed: 'Confirmée', fulfilled: 'Livrée', cancelled: 'Annulée',
+        ready: 'Prête', markReady: 'Marquer prête', readyTitle: 'Prévenir le client que la commande est prête ?',
+        markOutForDelivery: 'Marquer en livraison', shipDeliveryTitle: 'Confirmer la mise en livraison ?', shipDeliveryBody: 'Le client sera informé que la commande est en cours de livraison.',
+        takeawayLabel: 'À emporter', dineInLabel: 'Sur place', tableLabel: 'Table',
         createInvoice: 'Créer la facture',
         paid: 'Réglée', partially_paid: 'Partiellement réglée', unpaid: 'À régler',
         authorized: 'Autorisé · capture à faire', failed: 'Échec', voided: 'Annulé',
@@ -110,6 +121,9 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
         cash: 'Espèces', bank_transfer: 'Virement', mobile_money_manual: 'Mobile money', card_manual: 'Carte (manuel)', other: 'Autre',
         actionError: 'Impossible de modifier la commande.', loading: 'Chargement…',
         productCurrencyError: 'Tous les produits doivent utiliser la même devise.',
+        deliveryZones: 'Zones de livraison', deliveryZonesHint: 'Ajoute des tranches de distance et leurs frais en USD. La position du commerce doit être configurée.',
+        maxDistance: 'Jusqu’à (km)', deliveryFee: 'Frais (USD)', addZone: 'Ajouter une tranche', saveZones: 'Enregistrer les zones', zonesSaved: 'Zones de livraison enregistrées.',
+        deliveryLabel: 'Livraison', pickupLabel: 'Retrait',
       }
     : {
         title: 'Sales orders', subtitle: 'Prepare orders and track their fulfillment.',
@@ -125,6 +139,9 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
         cancelBody: 'If confirmed, the quantities will be returned to stock.',
         fulfilledTitle: 'Mark this order as fulfilled?', status: 'Status', draft: 'Draft',
         confirmed: 'Confirmed', fulfilled: 'Fulfilled', cancelled: 'Cancelled',
+        ready: 'Ready', markReady: 'Mark ready', readyTitle: 'Tell the customer the order is ready?',
+        markOutForDelivery: 'Mark out for delivery', shipDeliveryTitle: 'Confirm dispatch for delivery?', shipDeliveryBody: 'The customer will be notified that the order is out for delivery.',
+        takeawayLabel: 'Take away', dineInLabel: 'Eat in', tableLabel: 'Table',
         createInvoice: 'Create invoice',
         paid: 'Paid', partially_paid: 'Partially paid', unpaid: 'Due',
         authorized: 'Authorized · capture pending', failed: 'Failed', voided: 'Voided',
@@ -136,6 +153,9 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
         cash: 'Cash', bank_transfer: 'Bank transfer', mobile_money_manual: 'Mobile money', card_manual: 'Card (manual)', other: 'Other',
         actionError: 'Unable to update the order.', loading: 'Loading…',
         productCurrencyError: 'All products must use the same currency.',
+        deliveryZones: 'Delivery zones', deliveryZonesHint: 'Add distance bands and their fees in USD. The store location must be configured.',
+        maxDistance: 'Up to (km)', deliveryFee: 'Fee (USD)', addZone: 'Add distance band', saveZones: 'Save zones', zonesSaved: 'Delivery zones saved.',
+        deliveryLabel: 'Delivery', pickupLabel: 'Pickup',
       };
 
   const loadData = useCallback(async () => {
@@ -147,13 +167,27 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
     setIsLoading(true);
     setError('');
     try {
-      const [productResponse, orderResponse] = await Promise.all([
+      const [productResponse, orderResponse, companyResponse] = await Promise.all([
         getProducts(companyId, { page: 1, limit: 100, status: 'active' }),
         getSalesOrders(companyId, { page: 1, limit: 50 }),
+        getCompanyById(companyId).catch(() => null),
       ]);
       setProducts(productResponse.data || []);
       setOrders(orderResponse.data || []);
       setCapabilities(orderResponse.capabilities || { canCreate: false, canManage: false });
+      setDeliveryZones(companyResponse?.deliveryZones || []);
+      const companyCategoryIds = [
+        ...(Array.isArray(companyResponse?.categoryIds) ? companyResponse.categoryIds : []),
+        companyResponse?.categoryId,
+        companyResponse?.businessTypeId,
+      ].map((id) => String(id || '').trim());
+      setIsRetailCompany(!!getProductCatalogCategoryId(companyCategoryIds));
+      setHasDeliveryLocation(
+        companyResponse?.latitude != null
+        && companyResponse?.longitude != null
+        && Number.isFinite(Number(companyResponse.latitude))
+        && Number.isFinite(Number(companyResponse.longitude)),
+      );
       try {
         const customerResponse = await getCustomers(companyId, { page: 1, limit: 100, status: 'active' });
         setCustomers(customerResponse.data || []);
@@ -188,6 +222,9 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
       name: product.name,
       quantity: parsedQuantity,
       priceMinor: product.priceMinor || 0,
+      discountPercent: product.discountPercent || 0,
+      bulkMinQuantity: product.bulkMinQuantity || 0,
+      bulkDiscountPercent: product.bulkDiscountPercent || 0,
       currency: product.currency || 'XOF',
     }]);
     setSelectedProductId('');
@@ -204,6 +241,48 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
     setQuantity('1');
     setError('');
     setModalVisible(true);
+  };
+
+  const openDeliveryZones = () => {
+    setDeliveryZoneDrafts(deliveryZones.map((zone) => ({
+      maxDistanceKm: String(zone.maxDistanceKm),
+      fee: String(Number(zone.feeMinor || 0) / currencyScale(zone.currency || 'USD')),
+    })));
+    setError('');
+    setDeliveryZoneModalVisible(true);
+  };
+
+  const saveDeliveryZones = async () => {
+    if (deliveryZoneDrafts.length && !hasDeliveryLocation) {
+      setError(isFrench ? 'Configure la position de l’établissement avant les zones de livraison.' : 'Set the store location before configuring delivery zones.');
+      return;
+    }
+    let previousDistance = 0;
+    const normalizedZones = [];
+    for (const zone of deliveryZoneDrafts) {
+      const maxDistanceKm = Number(String(zone.maxDistanceKm || '').replace(',', '.'));
+      const fee = Number(String(zone.fee || '').replace(',', '.'));
+      const feeMinor = Math.round(fee * currencyScale('USD'));
+      if (!Number.isFinite(maxDistanceKm) || maxDistanceKm <= previousDistance || maxDistanceKm > 500
+        || !Number.isFinite(fee) || fee < 0 || !Number.isSafeInteger(feeMinor)) {
+        setError(isFrench ? 'Vérifie les distances croissantes et les frais de chaque tranche.' : 'Check that distances increase and each fee is valid.');
+        return;
+      }
+      normalizedZones.push({ maxDistanceKm, feeMinor, currency: 'USD' });
+      previousDistance = maxDistanceKm;
+    }
+    setIsSaving(true);
+    setError('');
+    try {
+      await updateCompanyDeliveryZones(companyId, normalizedZones);
+      setDeliveryZones(normalizedZones);
+      setDeliveryZoneModalVisible(false);
+      setNotice(copy.zonesSaved);
+    } catch (saveError) {
+      setError(saveError?.response?.data?.error || saveError?.message || copy.actionError);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const submitOrder = async () => {
@@ -300,9 +379,14 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
   };
 
   const confirmTransition = (order, action) => {
-    const title = action === 'confirm' ? copy.confirmTitle : action === 'fulfill' ? copy.fulfilledTitle : copy.cancelTitle;
-    const message = action === 'confirm' ? copy.confirmBody : action === 'cancel' ? copy.cancelBody : '';
-    const label = action === 'confirm' ? copy.confirm : action === 'fulfill' ? copy.fulfill : copy.cancelOrder;
+    const retailDelivery = order.channel === 'retail_app' && order.fulfillmentType === 'delivery';
+    const title = action === 'confirm' ? copy.confirmTitle : action === 'ready' ? retailDelivery ? copy.shipDeliveryTitle : copy.readyTitle : action === 'fulfill' ? copy.fulfilledTitle : copy.cancelTitle;
+    const message = action === 'confirm' ? copy.confirmBody : action === 'cancel' ? copy.cancelBody : action === 'ready' && retailDelivery ? copy.shipDeliveryBody : '';
+    const label = action === 'confirm' ? copy.confirm : action === 'ready' ? retailDelivery ? copy.markOutForDelivery : copy.markReady : action === 'fulfill' ? copy.fulfill : copy.cancelOrder;
+    if (Platform.OS === 'web') {
+      if (globalThis.confirm(message ? `${title}\n\n${message}` : title)) runTransition(order, action);
+      return;
+    }
     Alert.alert(title, message, [
       { text: copy.cancel, style: 'cancel' },
       { text: label, style: action === 'cancel' ? 'destructive' : 'default', onPress: () => runTransition(order, action) },
@@ -325,11 +409,29 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
         </View>
         {item.customer?.email ? <Text style={styles.secondaryText}>{item.customer.email}</Text> : null}
         {item.customer?.phone ? <Text style={styles.secondaryText}>{item.customer.phone}</Text> : null}
+        {item.channel === 'retail_app' ? (
+          <View>
+            <Text style={styles.modeText}>{item.fulfillmentType === 'delivery' ? copy.deliveryLabel : copy.pickupLabel}</Text>
+            {item.fulfillmentType === 'delivery' ? (
+              <>
+                <Text style={styles.secondaryText}>{item.deliveryAddress}</Text>
+                <Text style={styles.secondaryText}>{copy.deliveryFee}: {formatMoney(item.deliveryFeeMinor || 0, item.currency, locale)} · {Number(item.deliveryDistanceKm || 0).toFixed(1)} km</Text>
+              </>
+            ) : null}
+          </View>
+        ) : item.channel === 'restaurant_app' ? (
+          <Text style={styles.modeText}>
+            {item.fulfillmentType === 'takeaway' ? copy.takeawayLabel : copy.dineInLabel}{item.tableNumber ? ` · ${copy.tableLabel} ${item.tableNumber}` : ''}
+          </Text>
+        ) : null}
         <View style={styles.orderLines}>
           {(item.lines || []).map((line) => (
-            <View key={String(line._id || line.productId)} style={styles.orderLine}>
-              <Text style={styles.lineName} numberOfLines={1}>{line.quantity} × {line.productName}</Text>
-              <Text style={styles.lineTotal}>{formatMoney(line.lineTotalMinor, item.currency, locale)}</Text>
+            <View key={String(line._id || line.productId)}>
+              <View style={styles.orderLine}>
+                <Text style={styles.lineName} numberOfLines={1}>{line.quantity} × {line.productName}</Text>
+                <Text style={styles.lineTotal}>{formatMoney(line.lineTotalMinor, item.currency, locale)}</Text>
+              </View>
+              {line.note ? <Text style={styles.lineNote}>✎ {line.note}</Text> : null}
             </View>
           ))}
         </View>
@@ -337,7 +439,7 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
           <Text style={styles.secondaryText}>{copy.total}</Text>
           <Text style={styles.totalValue}>{formatMoney(getOrderTotal(item), item.currency, locale)}</Text>
         </View>
-        {item.channel === 'restaurant_app' ? (
+        {['restaurant_app', 'retail_app'].includes(item.channel) ? (
           <View style={styles.paymentSummary}>
             <Text style={styles.paymentStatusText}>{copy.paymentStatus}: {statusLabel(item.paymentStatus || 'unpaid')}</Text>
             <Text style={styles.paymentMeta}>{copy.amountPaid}: {formatMoney(item.paidMinor || 0, item.currency, locale)}</Text>
@@ -347,14 +449,14 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
                 {formatMoney(payment.amountMinor, payment.currency, locale)} · {copy[payment.method] || payment.method}{payment.reference ? ` · ${payment.reference}` : ''}
               </Text>
             ))}
-            {capabilities.canManage && item.paymentMethod === 'pay_at_venue' && (item.paidMinor || 0) < item.totalMinor && ['confirmed', 'fulfilled'].includes(item.status) ? (
+            {capabilities.canManage && item.paymentMethod === 'pay_at_venue' && (item.paidMinor || 0) < item.totalMinor && ['confirmed', 'ready', 'fulfilled'].includes(item.status) ? (
               <ActionButton label={copy.recordPayment} onPress={() => openPayment(item)} disabled={isWorking || isSaving} />
             ) : null}
           </View>
         ) : null}
         {item.notes ? <Text style={styles.noteText}>{item.notes}</Text> : null}
         {(capabilities.canManage && item.status !== 'fulfilled' && item.status !== 'cancelled') ||
-          (capabilities.canInvoice && invoicesEnabled && ['confirmed', 'fulfilled'].includes(item.status)) ? (
+          (capabilities.canInvoice && invoicesEnabled && ['confirmed', 'ready', 'fulfilled'].includes(item.status)) ? (
           <View style={styles.actions}>
             {capabilities.canManage && item.status !== 'fulfilled' && item.status !== 'cancelled' ? <>
               {item.status === 'draft' ? (
@@ -362,13 +464,16 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
               ) : item.paymentStatus === 'authorized' && ['stripe', 'paypal'].includes(item.paymentMethod) ? (
                 <ActionButton label={copy.retryCapture} disabled={isWorking} onPress={() => runTransition(item, 'confirm')} />
               ) : (
-                <ActionButton label={copy.fulfill} disabled={isWorking} onPress={() => confirmTransition(item, 'fulfill')} />
+                <>
+                  {item.status === 'confirmed' ? <ActionButton label={item.channel === 'retail_app' && item.fulfillmentType === 'delivery' ? copy.markOutForDelivery : copy.markReady} disabled={isWorking} onPress={() => confirmTransition(item, 'ready')} /> : null}
+                  <ActionButton label={copy.fulfill} tone={item.status === 'confirmed' ? 'quiet' : undefined} disabled={isWorking} onPress={() => confirmTransition(item, 'fulfill')} />
+                </>
               )}
               {!(item.paymentStatus === 'authorized' && ['stripe', 'paypal'].includes(item.paymentMethod)) ? (
                 <ActionButton label={copy.cancelOrder} tone="quiet" disabled={isWorking} onPress={() => confirmTransition(item, 'cancel')} />
               ) : null}
             </> : null}
-            {capabilities.canInvoice && invoicesEnabled && ['confirmed', 'fulfilled'].includes(item.status) ? (
+            {capabilities.canInvoice && invoicesEnabled && ['confirmed', 'ready', 'fulfilled'].includes(item.status) ? (
               <ActionButton label={copy.createInvoice} disabled={isWorking} onPress={() => createInvoice(item)} />
             ) : null}
             {isWorking ? <ActivityIndicator color={COLORS.accent} /> : null}
@@ -385,7 +490,10 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
           <Text style={styles.title}>{copy.title}</Text>
           <Text style={styles.subtitle}>{copy.subtitle}</Text>
         </View>
-        {capabilities.canCreate ? <ActionButton label={copy.create} onPress={openCreateModal} /> : null}
+        <View style={styles.headerActions}>
+          {capabilities.canManage && isRetailCompany ? <ActionButton label={copy.deliveryZones} tone="quiet" onPress={openDeliveryZones} /> : null}
+          {capabilities.canCreate ? <ActionButton label={copy.create} onPress={openCreateModal} /> : null}
+        </View>
       </View>
 
       {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
@@ -464,7 +572,7 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
                   style={[styles.productOption, selected && styles.productOptionSelected, incompatibleCurrency && styles.productOptionDisabled]}
                 >
                   <Text style={styles.productName}>{product.name}</Text>
-                  <Text style={styles.secondaryText}>{formatMoney(product.priceMinor, product.currency, locale)} · {isFrench ? 'Stock' : 'Stock'} {product.stockOnHand}</Text>
+                  <Text style={styles.secondaryText}>{formatMoney(unitPrice(product), product.currency, locale)}{product.discountPercent > 0 ? ` (-${product.discountPercent}%)` : ''} · {isFrench ? 'Stock' : 'Stock'} {product.stockOnHand}</Text>
                 </TouchableOpacity>
               );
             }) : <Text style={styles.emptyText}>{isFrench ? 'Aucun produit actif.' : 'No active products.'}</Text>}
@@ -484,7 +592,7 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
               <View key={String(line.productId)} style={styles.draftLine}>
                 <View style={styles.draftLineInfo}>
                   <Text style={styles.productName}>{line.quantity} × {line.name}</Text>
-                  <Text style={styles.secondaryText}>{formatMoney(line.priceMinor * line.quantity, line.currency, locale)}</Text>
+                  <Text style={styles.secondaryText}>{formatMoney(unitPrice(line, line.quantity) * line.quantity, line.currency, locale)}</Text>
                 </View>
                 <TouchableOpacity onPress={() => setLines((current) => current.filter((entry) => entry.productId !== line.productId))}>
                   <Text style={styles.removeText}>{copy.remove}</Text>
@@ -494,13 +602,59 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
             {lines.length ? (
               <View style={styles.totalRow}>
                 <Text style={styles.secondaryText}>{copy.total}</Text>
-                <Text style={styles.totalValue}>{formatMoney(lines.reduce((sum, line) => sum + line.priceMinor * line.quantity, 0), lines[0].currency, locale)}</Text>
+                <Text style={styles.totalValue}>{formatMoney(lines.reduce((sum, line) => sum + unitPrice(line, line.quantity) * line.quantity, 0), lines[0].currency, locale)}</Text>
               </View>
             ) : null}
             <Text style={styles.sectionTitle}>{copy.notes}</Text>
             <TextInput style={[styles.input, styles.notesInput]} placeholder={copy.notes} value={notes} onChangeText={setNotes} multiline maxLength={1000} />
             {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
             <ActionButton label={isSaving ? copy.loading : copy.save} onPress={submitOrder} disabled={isSaving || !lines.length} />
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+
+      <Modal visible={deliveryZoneModalVisible} animationType="slide" onRequestClose={() => setDeliveryZoneModalVisible(false)}>
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>{copy.deliveryZones}</Text>
+            <TouchableOpacity accessibilityRole="button" onPress={() => setDeliveryZoneModalVisible(false)}>
+              <Text style={styles.closeText}>{copy.cancel}</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+            <Text style={styles.secondaryText}>{copy.deliveryZonesHint}</Text>
+            {!hasDeliveryLocation ? <Text style={styles.error}>{isFrench ? 'Configure la position de l’établissement dans les informations de l’entreprise.' : 'Set the store location in company information before enabling delivery.'}</Text> : null}
+            {deliveryZoneDrafts.map((zone, index) => (
+              <View key={`zone-${index}`} style={styles.zoneRow}>
+                <TextInput
+                  style={[styles.input, styles.zoneInput]}
+                  placeholder={copy.maxDistance}
+                  value={zone.maxDistanceKm}
+                  onChangeText={(value) => setDeliveryZoneDrafts((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, maxDistanceKm: value } : item))}
+                  keyboardType="decimal-pad"
+                />
+                <TextInput
+                  style={[styles.input, styles.zoneInput]}
+                  placeholder={copy.deliveryFee}
+                  value={zone.fee}
+                  onChangeText={(value) => setDeliveryZoneDrafts((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, fee: value } : item))}
+                  keyboardType="decimal-pad"
+                />
+                <TouchableOpacity accessibilityRole="button" accessibilityLabel={copy.remove} onPress={() => setDeliveryZoneDrafts((current) => current.filter((_, itemIndex) => itemIndex !== index))}>
+                  <Text style={styles.removeZone}>×</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+            <ActionButton
+              label={copy.addZone}
+              tone="quiet"
+              onPress={() => setDeliveryZoneDrafts((current) => {
+                const lastDistance = Number(current[current.length - 1]?.maxDistanceKm || 0);
+                return [...current, { maxDistanceKm: String(lastDistance + 5), fee: '0' }];
+              })}
+            />
+            {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
+            <ActionButton label={isSaving ? copy.loading : copy.saveZones} disabled={isSaving} onPress={saveDeliveryZones} />
           </ScrollView>
         </SafeAreaView>
       </Modal>
@@ -556,6 +710,7 @@ export default function ProSalesOrdersScreen({ companyId, invoicesEnabled = fals
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: COLORS.background },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingHorizontal: 18, paddingTop: 16, paddingBottom: 12 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 7 },
   headerText: { flex: 1 },
   title: { color: COLORS.text, fontSize: 23, fontWeight: '700' },
   subtitle: { color: COLORS.textSoft, fontSize: 13, marginTop: 4 },
@@ -570,6 +725,9 @@ const styles = StyleSheet.create({
   status: { overflow: 'hidden', borderRadius: 4, paddingHorizontal: 8, paddingVertical: 4, fontSize: 11, fontWeight: '700' },
   status_draft: { color: COLORS.warning, backgroundColor: '#FFF4D6' },
   status_confirmed: { color: COLORS.accent, backgroundColor: '#F0EAFE' },
+  status_ready: { color: '#0B6E4F', backgroundColor: '#D8F5E8' },
+  modeText: { color: COLORS.accent, fontSize: 12, fontWeight: '800', marginTop: 4 },
+  lineNote: { color: COLORS.muted, fontSize: 11, marginTop: 2, marginBottom: 4 },
   status_fulfilled: { color: COLORS.success, backgroundColor: '#E3F4EA' },
   status_cancelled: { color: COLORS.danger, backgroundColor: '#FBE8E8' },
   secondaryText: { color: COLORS.textSoft, fontSize: 12, marginTop: 3 },
@@ -609,6 +767,9 @@ const styles = StyleSheet.create({
   form: { padding: 16, paddingBottom: 36 },
   sectionTitle: { color: COLORS.text, fontSize: 15, fontWeight: '700', marginTop: 16, marginBottom: 8 },
   input: { minHeight: 44, backgroundColor: COLORS.surface, borderColor: COLORS.border, borderWidth: 1, borderRadius: 6, paddingHorizontal: 12, marginBottom: 8, color: COLORS.text },
+  zoneRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
+  zoneInput: { flex: 1, marginBottom: 0 },
+  removeZone: { color: COLORS.danger, fontSize: 24, paddingHorizontal: 6 },
   productOption: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10, minHeight: 56, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 6, paddingHorizontal: 12, marginTop: 6 },
   customerOption: { minHeight: 48, justifyContent: 'center', backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 6, paddingHorizontal: 12, marginTop: 6 },
   productOptionSelected: { borderColor: COLORS.accent, borderWidth: 2 },

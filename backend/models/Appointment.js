@@ -27,6 +27,14 @@ const appointmentSchema = new mongoose.Schema(
 
     date: String,
 
+    serviceSelection: {
+      serviceId: { type: String, default: '' },
+      name: { type: String, default: '' },
+      categoryId: { type: String, default: '' },
+      price: { type: Number, default: null },
+      selectedImage: { type: String, default: '' },
+    },
+
     type: {
       type: String,
       default: 'appointment',
